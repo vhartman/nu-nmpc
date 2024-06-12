@@ -16,7 +16,7 @@ class System:
     self.input_jac = jax.jit(jax.jacfwd(self.f, argnums=1))
 
   def f(self, state, u):
-      raise NotImplementedError("Implement me pls")
+    raise NotImplementedError("Implement me pls")
 
   def step(self, state, u, dt):
     x_dot = self.f(state, u)
@@ -33,7 +33,7 @@ class System:
     return B_disc * dt
 
   def K(self, x, u, dt):
-      return self.A(x, u, dt) @ x[:, None] + self.B(x, u, dt) @ u[:, None] - dt * self.f(x, u)[:, None]
+    return self.A(x, u, dt) @ x[:, None] + self.B(x, u, dt) @ u[:, None] - dt * self.f(x, u)[:, None]
 
   def linearization(self, x, u, dt):
     A_disc = self.sys_jac(x, u)
@@ -197,7 +197,7 @@ class Controller:
     self.system = system
 
   def compute(self, x):
-      raise NotImplementedError("Implement me pls")
+    raise NotImplementedError("Implement me pls")
 
 class NMPC(Controller):
   def __init__(self, system, N, dt):
@@ -222,76 +222,76 @@ class NMPC(Controller):
     u = cp.Variable((self.input_dim, self.N))
 
     if len(self.prev_x) == 0:
-        for i in range(self.N+1):
-            self.prev_x.append(state)
+      for i in range(self.N+1):
+        self.prev_x.append(state)
 
-            if i < self.N:
-                self.prev_u.append(np.zeros(self.input_dim))
+        if i < self.N:
+          self.prev_u.append(np.zeros(self.input_dim))
 
-        self.prev_x = np.array(self.prev_x).T
-        self.prev_u = np.array(self.prev_u).T
+      self.prev_x = np.array(self.prev_x).T
+      self.prev_u = np.array(self.prev_u).T
 
     I = np.eye(self.sys.state_dim)
 
     # dynamics constraints
     for _ in range(self.sqp_iters):
-        constraints = []
-        for i in range(self.N):
-            idx = i
-            next_idx = i+1
+      constraints = []
+      for i in range(self.N):
+        idx = i
+        next_idx = i+1
 
-            dt = self.dts[i]
+        dt = self.dts[i]
 
-            # this should be shifted by one step
-            prev_state = self.prev_x[:, i].flatten()
-            prev_input = self.prev_u[:, i].flatten()
+        # this should be shifted by one step
+        prev_state = self.prev_x[:, i].flatten()
+        prev_input = self.prev_u[:, i].flatten()
 
-            A, B, K = self.sys.linearization(prev_state, prev_input, dt)
+        A, B, K = self.sys.linearization(prev_state, prev_input, dt)
 
-            constraints.append(
-                x[:, next_idx][:, None] == (I + A) @ x[:, idx][:, None] + B @ u[:, idx][:, None] - K
-            )
+        constraints.append(
+            x[:, next_idx][:, None] == (I + A) @ x[:, idx][:, None] + B @ u[:, idx][:, None] - K
+        )
 
-        constraints.append(x[:, 0] == state)
+      constraints.append(x[:, 0] == state)
 
-        # state constraints
-        # input constraints
-        for i in range(self.N + 1):
-            if i < self.N:
-                constraints.append(u[:, i] >= self.sys.input_limits[:, 0])
-                constraints.append(u[:, i] <= self.sys.input_limits[:, 1])
+      # state constraints
+      # input constraints
+      for i in range(self.N + 1):
+        if i < self.N:
+          constraints.append(u[:, i] >= self.sys.input_limits[:, 0])
+          constraints.append(u[:, i] <= self.sys.input_limits[:, 1])
 
-            constraints.append(x[:, i] >= self.sys.state_limits[:, 0])
-            constraints.append(x[:, i] <= self.sys.state_limits[:, 1])
+        constraints.append(x[:, i] >= self.sys.state_limits[:, 0])
+        constraints.append(x[:, i] <= self.sys.state_limits[:, 1])
 
-        cost = 0
-        for i in range(self.N):
-          dt = self.dts[i]
-          cost += dt * cp.sum_squares(Q @ (x[:, i+1] [:, None] - x_ref))
-          cost += dt * cp.sum_squares(R @ u[:,i][:, None])
+      cost = 0
+      for i in range(self.N):
+        dt = self.dts[i]
+        cost += dt * cp.sum_squares(Q @ (x[:, i+1] [:, None] - x_ref))
+        cost += dt * cp.sum_squares(R @ u[:,i][:, None])
 
-        #cost = cp.sum_squares(10*(x[2, self.N] - target_angle))
-        #cost += cp.sum_squares(10*(x[1, self.N] - target_angle))
-        #cost += cp.sum_squares(1 * (x[0, self.N]))
+      #cost = cp.sum_squares(10*(x[2, self.N] - target_angle))
+      #cost += cp.sum_squares(10*(x[1, self.N] - target_angle))
+      #cost += cp.sum_squares(1 * (x[0, self.N]))
 
-        objective = cp.Minimize(cost)
+      objective = cp.Minimize(cost)
 
-        prob = cp.Problem(objective, constraints)
+      prob = cp.Problem(objective, constraints)
 
-        # warm start
-        x.value = self.prev_x
-        u.value = self.prev_u
+      # warm start
+      x.value = self.prev_x
+      u.value = self.prev_u
 
-        # The optimal objective value is returned by `prob.solve()`.
-        result = prob.solve(solver='OSQP', eps_abs=1e-6, eps_rel=1e-6, max_iter=10000)
-        #result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
-        #result = prob.solve(solver='ECOS', verbose=True)
+      # The optimal objective value is returned by `prob.solve()`.
+      result = prob.solve(solver='OSQP', eps_abs=1e-6, eps_rel=1e-6, max_iter=10000)
+      #result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
+      #result = prob.solve(solver='ECOS', verbose=True)
 
-        print(x.value)
-        print(u.value)
+      print(x.value)
+      print(u.value)
 
-        self.prev_x = x.value
-        self.prev_u = u.value
+      self.prev_x = x.value
+      self.prev_u = u.value
 
     if prob.status not in ["infeasible", "unbounded"]:
         return u.value[:, 0]
@@ -305,7 +305,7 @@ class NU_NMPC(Controller):
     self.nmpc.dts = dts
 
   def compute(self, state, Q, x_ref, R):
-      return self.nmpc.compute(state, Q, x_ref, R)
+    return self.nmpc.compute(state, Q, x_ref, R)
 
 
 def eval(system, controller, x0, T_sim, dt_sim):
@@ -341,8 +341,8 @@ def eval(system, controller, x0, T_sim, dt_sim):
 #def get_relu_spacing(dt0, dt_max, T, steps):
 
 def get_linear_spacing(dt0, T, steps):
-    alpha = 2 *(T - steps * dt0) / (steps * (steps-1))
-    return [dt0 + i * alpha for i in range(steps)]
+  alpha = 2 *(T - steps * dt0) / (steps * (steps-1))
+  return [dt0 + i * alpha for i in range(steps)]
 
 def double_cartpole_test():
   T_sim = 5
@@ -372,27 +372,27 @@ def double_cartpole_test():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
-      plt.figure()
-      plt.plot(times[1:], states, label=["x", "a1", "a2", "v", "a1_v", "a2_v"])
-      plt.legend()
+    plt.figure()
+    plt.plot(times[1:], states, label=["x", "a1", "a2", "v", "a1_v", "a2_v"])
+    plt.legend()
 
-      plt.figure()
-      plt.plot(times[1:], inputs)
+    plt.figure()
+    plt.plot(times[1:], inputs)
 
-      plt.figure()
-      for i in range(len(times[1:])):
-        if i % 1 == 0:
-          rect = patches.Rectangle((states[i][0]-0.05, 0-0.05), width=0.1, height=0.1, edgecolor='r', facecolor='none')
-          plt.gca().add_patch(rect)
+    plt.figure()
+    for i in range(len(times[1:])):
+      if i % 1 == 0:
+        rect = patches.Rectangle((states[i][0]-0.05, 0-0.05), width=0.1, height=0.1, edgecolor='r', facecolor='none')
+        plt.gca().add_patch(rect)
 
-          xpos = states[i][0]
-          plt.plot([xpos, xpos + np.sin(states[i][1])], [0, np.cos(states[i][1])], color=(0, 0, i / len(times)))
-          plt.plot([xpos + np.sin(states[i][1]), xpos + np.sin(states[i][1]) + np.sin(states[i][1] + states[i][2])], [np.cos(states[i][1]), np.cos(states[i][1]) + np.cos(states[i][1] + states[i][2])], color=(0, 0, i / len(times)))
+        xpos = states[i][0]
+        plt.plot([xpos, xpos + np.sin(states[i][1])], [0, np.cos(states[i][1])], color=(0, 0, i / len(times)))
+        plt.plot([xpos + np.sin(states[i][1]), xpos + np.sin(states[i][1]) + np.sin(states[i][1] + states[i][2])], [np.cos(states[i][1]), np.cos(states[i][1]) + np.cos(states[i][1] + states[i][2])], color=(0, 0, i / len(times)))
 
-      plt.axis('equal')
+    plt.axis('equal')
 
-      plt.figure()
-      plt.plot(computation_times)
+    plt.figure()
+    plt.plot(computation_times)
 
   plt.show()
 
@@ -410,9 +410,9 @@ def cartpole_test():
 
   R = np.diag([.1])
 
-  nmpc = NMPC(sys, 10, dt)
+  nmpc = NMPC(sys, 20, dt)
 
-  dts = get_linear_spacing(dt, 20 * dt, 5)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts)
 
   nmpc_control = lambda x: nmpc.compute(x, Q, ref, R)
@@ -422,25 +422,33 @@ def cartpole_test():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
-      plt.figure()
-      plt.plot(times[1:], states, label=['x', 'v', 'theta', 'w'])
-      plt.legend()
+    plt.figure()
+    plt.plot(times[1:], states, label=['x', 'v', 'theta', 'w'])
+    plt.legend()
 
-      plt.figure()
-      plt.plot(times[1:], inputs)
+    plt.figure()
+    plt.plot(times[1:], inputs)
 
-      plt.figure()
-      for i in range(len(times[1:])):
-        if i % 1 == 0:
-          rect = patches.Rectangle((states[i][0]-0.05, 0-0.05), width=0.1, height=0.1, edgecolor='r', facecolor='none')
-          plt.gca().add_patch(rect)
+    plt.figure()
+    for i in range(len(times[1:])):
+      if i % 1 == 0:
+        rect = patches.Rectangle((states[i][0]-0.05, 0-0.05), width=0.1, height=0.1, edgecolor='r', facecolor='none')
+        plt.gca().add_patch(rect)
 
-          plt.plot([states[i][0], states[i][0] + np.sin(states[i][2])], [0, -np.cos(states[i][2])], color=(0, 0, i / len(times)))
+        plt.plot([states[i][0], states[i][0] + np.sin(states[i][2])], [0, -np.cos(states[i][2])], color=(0, 0, i / len(times)))
 
-      plt.axis('equal')
+    plt.axis('equal')
 
-      plt.figure()
-      plt.plot(computation_times)
+    plt.figure()
+    plt.plot(computation_times)
+
+    cost = 0
+    for i in range(len(states)):
+      diff = (states[i][:, None] - ref)
+      u = inputs[i][:, None]
+      cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    print(cost)
 
   plt.show()
 
@@ -468,15 +476,15 @@ def test_laplacian_dynamics():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
-      plt.figure()
-      plt.plot(times[1:], states, label=['x', 'y', 'z'])
-      plt.legend()
+    plt.figure()
+    plt.plot(times[1:], states, label=['x', 'y', 'z'])
+    plt.legend()
 
-      plt.figure()
-      plt.plot(times[1:], inputs)
+    plt.figure()
+    plt.plot(times[1:], inputs)
 
-      plt.figure()
-      plt.plot(computation_times)
+    plt.figure()
+    plt.plot(computation_times)
 
   plt.show()
 
@@ -505,15 +513,15 @@ def test_masspoint():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
-      plt.figure()
-      plt.plot(times[1:], states, label=['x', 'v_x', 'y', 'v_y'])
-      plt.legend()
+    plt.figure()
+    plt.plot(times[1:], states, label=['x', 'v_x', 'y', 'v_y'])
+    plt.legend()
 
-      plt.figure()
-      plt.plot(times[1:], inputs)
+    plt.figure()
+    plt.plot(times[1:], inputs)
 
-      plt.figure()
-      plt.plot(computation_times)
+    plt.figure()
+    plt.plot(computation_times)
 
   plt.show()
 
@@ -535,7 +543,7 @@ def test_quadcopter():
   u = np.zeros(2) - 0
   dt = 0.05
 
-  nmpc = NMPC(sys, 5, dt*4)
+  nmpc = NMPC(sys, 20, dt)
 
   #dts = get_relu_spacing(dt, 30 * dt, 15)
   dts = get_linear_spacing(dt, 20 * dt, 5)
@@ -548,34 +556,34 @@ def test_quadcopter():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
-      plt.figure()
-      plt.plot(times[1:], states, label=["x", "y", "phi", "v_x", "v_y", "phi_dot"])
-      plt.legend()
+    plt.figure()
+    plt.plot(times[1:], states, label=["x", "y", "phi", "v_x", "v_y", "phi_dot"])
+    plt.legend()
 
-      plt.figure()
-      plt.plot(times[1:], inputs)
+    plt.figure()
+    plt.plot(times[1:], inputs)
 
-      plt.figure()
-      l = 0.2
-      for i in range(len(times[1:])):
-        if i % 1 == 0:
-          xpos = states[i][0]
-          ypos = states[i][1]
-          plt.scatter([xpos], [ypos + 0.05*np.cos(states[i][2])], color=(0, 0, i / len(times)))
-          plt.plot([xpos - l*np.cos(states[i][2]), xpos + l*np.cos(states[i][2])], [ypos - l*np.sin(states[i][2]), ypos + l*np.sin(states[i][2])], color=(0, 0, i / len(times)))
+    plt.figure()
+    l = 0.2
+    for i in range(len(times[1:])):
+      if i % 1 == 0:
+        xpos = states[i][0]
+        ypos = states[i][1]
+        plt.scatter([xpos], [ypos + 0.05*np.cos(states[i][2])], color=(0, 0, i / len(times)))
+        plt.plot([xpos - l*np.cos(states[i][2]), xpos + l*np.cos(states[i][2])], [ypos - l*np.sin(states[i][2]), ypos + l*np.sin(states[i][2])], color=(0, 0, i / len(times)))
 
-      plt.axis('equal')
+    plt.axis('equal')
 
-      plt.figure()
-      plt.plot(computation_times)
+    plt.figure()
+    plt.plot(computation_times)
 
-      cost = 0
-      for i in range(len(states)):
-          diff = (states[i][:, None] - ref)
-          u = inputs[i][:, None]
-          cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+    cost = 0
+    for i in range(len(states)):
+      diff = (states[i][:, None] - ref)
+      u = inputs[i][:, None]
+      cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
 
-      print(cost)
+    print(cost)
 
   plt.show()
 
@@ -583,9 +591,9 @@ def main():
     pass
 
 if __name__ == "__main__":
-  test_quadcopter()
+  #test_quadcopter()
   #test_laplacian_dynamics()
   #test_masspoint()
 
-  #cartpole_test()
+  cartpole_test()
   #double_cartpole_test()
