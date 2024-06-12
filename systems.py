@@ -184,3 +184,81 @@ class Quadcopter2D(System):
             -F * jnp.sin(x[2]) / m,
             F * jnp.cos(x[2]) / m - g,
             M / Ixx])
+
+class ChainOfMasses(System):
+  def __init__(self, num_masses=3):
+    self.num_masses = num_masses
+    self.dim = 2
+    self.x0 = np.array([0, 0])
+
+    self.state_dim = num_masses * 2 * 2 + 2
+    self.input_dim = 2
+
+    self.state_limits = np.array([[-20, 20] * (num_masses * 2 * 2 + 2)])
+    self.input_limits = np.array([[-1, 1], [-1, 1]])
+
+    super().__init__()
+
+  def f(self, state, u):
+    x = state
+
+    x_dot = jnp.zeros(len(state))
+
+    L = 0.033
+    m = 0.03
+    D = 0.1
+
+    for i in range(0, self.num_masses):
+      prev_idx = (i-1) * self.dim
+      idx = i * self.dim
+      next_idx = (i + 1) * self.dim
+      
+      prev = self.x0
+      if (i > 0):
+        prev = x[prev_idx:prev_idx+self.dim]
+      curr = x[idx:idx+self.dim]
+      next = x[next_idx:next_idx+self.dim]
+
+      def F(x1, x2):
+        # delta = x[idx:idx+self.dim] - x[next_idx:next_idx+self.dim]
+        delta = x2 - x1
+        F = D * (1 - L / jnp.linalg.norm(delta)) * delta
+        return F
+
+      offset = (self.num_masses + 1) * self.dim
+      x_dot = x_dot.at[offset + idx:offset+idx+2].set(1. / m * (F(curr, next) - F(prev, curr)) + np.array([0., -9.81]))
+      x_dot = x_dot.at[idx:idx+2].set(x[offset + idx:offset+idx+2])
+
+    x_dot = x_dot.at[self.num_masses*self.dim:(self.num_masses+1)*self.dim].set(u)
+
+    return x_dot
+
+class Racecar(System):
+  def __init__(self):
+    # self.state_dim = 6
+    # self.input_dim = 2
+
+    # self.state_limits = np.array([[-20, 20], [-5, 20], [-20, 20], [-80, 80], [-80, 80], [-80, 80]])
+    # self.input_limits = np.array([[0, 2], [0, 2]])
+
+    super().__init__()
+
+  def f(self, state, u):
+    pass
+    # x = state
+
+    # # First derivative, xdot = [vy, vz, phidot, ay, az, phidotdot]
+    # g     = 9.81    # Gravitational acceleration (m/s^2)
+    # m     = 0.18    # Mass (kg)
+    # Ixx   = 0.00025 # Mass moment of inertia (kg*m^2)
+    # L     = 0.086   # Arm length (m)
+
+    # F = u[0] + u[1]
+    # M = (u[1] - u[0]) * L
+
+    # return jnp.asarray([x[3],
+    #         x[4],
+    #         x[5],
+    #         -F * jnp.sin(x[2]) / m,
+    #         F * jnp.cos(x[2]) / m - g,
+    #         M / Ixx])

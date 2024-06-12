@@ -35,7 +35,7 @@ class NMPC(Controller):
     #self.dts = [self.dt + 0.005*(i+1) for i in range(self.N)]
 
     # solver params
-    self.sqp_iters = 3
+    self.sqp_iters = 2
 
   def compute(self, state, Q, x_ref, R):
     x = cp.Variable((self.state_dim, self.N+1))
@@ -407,6 +407,76 @@ def test_quadcopter():
 
   plt.show()
 
+def test_chain_of_masses():
+  T_sim = 5
+
+  sys = ChainOfMasses(2)
+  x = np.zeros(3*2+2*2)
+  for i in range(3):
+    x[i * 2] = (i+1) * 1
+
+  x[3 * 2: ] = 0
+
+  u = np.zeros(2)
+
+  # compute steady state
+  dummy_control = lambda x: np.array([0, 0])
+  dummy_sol = eval(sys, dummy_control, x, 0.1, 0.01)
+
+  ref = dummy_sol[1][-1][:, None]
+
+  print(ref)
+
+  # perturb
+  dummy_control = lambda x: np.array([1, 1])
+  dummy_sol = eval(sys, dummy_control, ref[:, 0], 1, 0.01)
+  
+  ref = ref.at[3*2:].set(0)
+  x = dummy_sol[1][-1]
+  
+  Q = np.diag([0, 0, 0, 0, 25, 25, 10, 10, 10, 10])
+  R = np.diag([.01, .01])
+
+  dt = 0.05
+  nmpc = NMPC(sys, 40, dt)
+
+  dts = get_linear_spacing(dt, 40 * dt, 20)
+  nu_mpc = NU_NMPC(sys, dts)
+
+  nmpc_control = lambda x: nmpc.compute(x, Q, ref, R)
+  numpc_control = lambda x: nu_mpc.compute(x, Q, ref, R)
+
+  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+
+  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+    plt.figure()
+    plt.plot(times[1:], states)
+    plt.legend()
+
+    plt.figure()
+    plt.plot(times[1:], inputs)
+
+    plt.figure()
+    plt.plot(computation_times)
+
+    plt.figure()
+    for i in range(len(states)):
+      state = states[i]
+      plt.plot([0] + [state[i*2] for i in range(3)], [0] + [state[1 + i*2] for i in range(3)], 'o-', color = (0, 0, i / len(states)))
+
+    plt.axis('equal')
+
+    cost = 0
+    for i in range(len(states)):
+      diff = (states[i][:, None] - ref)
+      u = inputs[i][:, None]
+      cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    print(cost)
+
+  plt.show()
+
 def main():
     pass
 
@@ -414,6 +484,7 @@ if __name__ == "__main__":
   #test_quadcopter()
   #test_laplacian_dynamics()
   #test_masspoint()
+  test_chain_of_masses()
 
-  cartpole_test()
+  # cartpole_test()
   #double_cartpole_test()
