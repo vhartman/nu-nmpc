@@ -408,14 +408,16 @@ def test_quadcopter():
   plt.show()
 
 def test_chain_of_masses():
-  T_sim = 5
+  T_sim = 20
 
-  sys = ChainOfMasses(2)
-  x = np.zeros(3*2+2*2)
-  for i in range(3):
+  N = 3
+  sys = ChainOfMasses(N)
+  x = np.zeros((N+1)*2+N*2)
+  for i in range(N+1):
     x[i * 2] = (i+1) * 1
 
-  x[3 * 2: ] = 0
+  # set v to zero for all
+  x[(N+1) * 2: ] = 0
 
   u = np.zeros(2)
 
@@ -431,16 +433,16 @@ def test_chain_of_masses():
   dummy_control = lambda x: np.array([1, 1])
   dummy_sol = eval(sys, dummy_control, ref[:, 0], 1, 0.01)
   
-  ref = ref.at[3*2:].set(0)
+  ref = ref.at[(N+1)*2:].set(0)
   x = dummy_sol[1][-1]
   
-  Q = np.diag([0, 0, 0, 0, 25, 25, 10, 10, 10, 10])
+  Q = np.diag([0]*N*2 + [25, 25] + [20] * N * 2)
   R = np.diag([.01, .01])
 
-  dt = 0.05
-  nmpc = NMPC(sys, 40, dt)
+  dt = 0.1
+  nmpc = NMPC(sys, 20, dt)
 
-  dts = get_linear_spacing(dt, 40 * dt, 20)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts)
 
   nmpc_control = lambda x: nmpc.compute(x, Q, ref, R)
@@ -463,7 +465,7 @@ def test_chain_of_masses():
     plt.figure()
     for i in range(len(states)):
       state = states[i]
-      plt.plot([0] + [state[i*2] for i in range(3)], [0] + [state[1 + i*2] for i in range(3)], 'o-', color = (0, 0, i / len(states)))
+      plt.plot([0] + [state[i*2] for i in range(N+1)], [0] + [state[1 + i*2] for i in range(N+1)], 'o-', color = (0, 0, i / len(states)))
 
     plt.axis('equal')
 
