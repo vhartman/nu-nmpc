@@ -103,7 +103,7 @@ class NMPC(Controller):
       u.value = self.prev_u
 
       # The optimal objective value is returned by `prob.solve()`.
-      result = prob.solve(solver='OSQP', eps_abs=1e-6, eps_rel=1e-6, max_iter=10000)
+      result = prob.solve(solver='OSQP', eps_abs=1e-5, eps_rel=1e-3, max_iter=10000)
       #result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       #result = prob.solve(solver='ECOS', verbose=True)
 
@@ -126,7 +126,6 @@ class NU_NMPC(Controller):
 
   def compute(self, state, Q, x_ref, R):
     return self.nmpc.compute(state, Q, x_ref, R)
-
 
 def eval(system, controller, x0, T_sim, dt_sim):
   states = []
@@ -479,6 +478,48 @@ def test_chain_of_masses():
 
   plt.show()
 
+def test_cstr():
+  T_sim = 0.005*50
+
+  sys = CSTR()
+  # Set the initial state of mpc, simulator and estimator:
+  C_a_0 = 0.8 # This is the initial concentration inside the tank [mol/l]
+  C_b_0 = 0.5 # This is the controlled variable [mol/l]
+  T_R_0 = 134.14 #[C]
+  T_K_0 = 130.0 #[C]
+  x = np.array([C_a_0, C_b_0, T_R_0, T_K_0])
+
+  u = np.zeros(2)
+
+  Q = np.diag([0, 10., 0.0, 0])
+  ref = np.array([0, 0.6, 0, 0]).reshape(-1, 1)
+  R = np.diag([.1, .001])
+
+  dt = 0.001
+  nmpc = NMPC(sys, 20, dt)
+
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+  nu_mpc = NU_NMPC(sys, dts)
+
+  nmpc_control = lambda x: nmpc.compute(x, Q, ref, R)
+  numpc_control = lambda x: nu_mpc.compute(x, Q, ref, R)
+
+  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+
+  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+    plt.figure()
+    plt.plot(times[1:], states, label=['C_a', 'C_b', 'T_R', 'T_K'])
+    plt.legend()
+
+    plt.figure()
+    plt.plot(times[1:], inputs, label=['F', 'Q_dot'])
+
+    plt.figure()
+    plt.plot(computation_times)
+
+  plt.show()
+
 def main():
     pass
 
@@ -486,7 +527,8 @@ if __name__ == "__main__":
   #test_quadcopter()
   #test_laplacian_dynamics()
   #test_masspoint()
-  test_chain_of_masses()
+  # test_chain_of_masses()
+  test_cstr()
 
   # cartpole_test()
   #double_cartpole_test()

@@ -232,6 +232,59 @@ class ChainOfMasses(System):
     x_dot = x_dot.at[self.num_masses*self.dim:(self.num_masses+1)*self.dim].set(u)
 
     return x_dot
+  
+class CSTR(System):
+  def __init__(self):
+    self.state_dim = 4
+    self.input_dim = 2
+
+    self.state_limits = np.array([[0.1, 2], [0.1, 2], [50, 140], [50, 140]])
+    self.input_limits = np.array([[5, 100], [-8500, 0.0]])
+
+    super().__init__()
+  
+  # taken from https://www.do-mpc.com/en/latest/example_gallery/CSTR.html
+  def f(self, state, u):
+    C_a, C_b, T_R, T_K = state
+    F, Q_dot = u
+
+    # Certain parameters
+    K0_ab = 1.287e12 # K0 [h^-1]
+    K0_bc = 1.287e12 # K0 [h^-1]
+    K0_ad = 9.043e9 # K0 [l/mol.h]
+    R_gas = 8.3144621e-3 # Universal gas constant
+    E_A_ab = 9758.3*1.00 #* R_gas# [kj/mol]
+    E_A_bc = 9758.3*1.00 #* R_gas# [kj/mol]
+    E_A_ad = 8560.0*1.0 #* R_gas# [kj/mol]
+    H_R_ab = 4.2 # [kj/mol A]
+    H_R_bc = -11.0 # [kj/mol B] Exothermic
+    H_R_ad = -41.85 # [kj/mol A] Exothermic
+    Rou = 0.9342 # Density [kg/l]
+    Cp = 3.01 # Specific Heat capacity [kj/Kg.K]
+    Cp_k = 2.0 # Coolant heat capacity [kj/kg.k]
+    A_R = 0.215 # Area of reactor wall [m^2]
+    V_R = 10.01 #0.01 # Volume of reactor [l]
+    m_k = 5.0 # Coolant mass[kg]
+    T_in = 130.0 # Temp of inflow [Celsius]
+    K_w = 4032.0 # [kj/h.m^2.K]
+    C_A0 = (5.7+4.5)/2.0*1.0 # Concentration of A in input Upper bound 5.7 lower bound 4.5 [mol/l]
+
+    alpha = .95
+    beta = 1.
+
+    K_1 = beta * K0_ab * jnp.exp((-E_A_ab)/((T_R+273.15)))
+    K_2 =  K0_bc * jnp.exp((-E_A_bc)/((T_R+273.15)))
+    K_3 = K0_ad * jnp.exp((-alpha*E_A_ad)/((T_R+273.15)))
+
+    T_dif = T_R - T_K
+
+    C_a_dot = F*(C_A0 - C_a) -K_1*C_a - K_3*(C_a**2)
+    C_b_dot = -F*C_b + K_1*C_a - K_2*C_b
+    T_R_dot = ((K_1*C_a*H_R_ab + K_2*C_b*H_R_bc + K_3*(C_a**2)*H_R_ad)/(-Rou*Cp)) + F*(T_in-T_R) +(((K_w*A_R)*(-T_dif))/(Rou*Cp*V_R))
+    T_K_dot = (Q_dot + K_w*A_R*(T_dif))/(m_k*Cp_k)
+
+    return jnp.asarray([C_a_dot, C_b_dot, T_R_dot, T_K_dot])
+
 
 class Racecar(System):
   def __init__(self):
