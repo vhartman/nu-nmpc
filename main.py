@@ -9,12 +9,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.transforms as transforms
 
-def constant_cost(state, i, Q, ref, R):
-  return Q, ref, R
-
-def path_following_cost(state, i, Q, ref, R):
-  return Q, ref[i], R
-
 def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
   xn = x0
   t0 = 0.
@@ -49,16 +43,6 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     computation_times_ms.append((end - start) / 1e6)
 
   return times, states, inputs, computation_times_ms
-
-#def get_relu_spacing(dt0, dt_max, T, steps):
-
-def get_linear_spacing(dt0, T, steps):
-  alpha = 2 *(T - steps * dt0) / (steps * (steps-1))
-  return [dt0 + i * alpha for i in range(steps)]
-
-def get_linear_spacing_v2(dt0, T, steps):
-  alpha = 2 *(T-dt0 - (steps-1) * dt0) / ((steps-1) * (steps-2))
-  return [dt0] + [dt0 + i * alpha for i in range(steps)]
 
 def double_cartpole_test():
   T_sim = 5
@@ -800,8 +784,8 @@ def test_unicycle_ref_path():
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
-  # dts = get_linear_spacing(dt, 20 * dt, 10)
-  dts = get_linear_spacing_v2(dt, 20 * dt, 10)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_linear_spacing_v2(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
   nu_mpc.nmpc.state_scaling = state_scaling
@@ -1420,7 +1404,7 @@ def test_linearization_jerk():
   # state_scaling = 1 / np.array([1., 1, 1, 1., 1., 1.])
   # input_scaling = 1 / np.array([1, 1])
 
-  nmpc = NMPC(sys, 40, dt, quadratic_cost, ref)
+  nmpc = NMPC(sys, 10, dt, quadratic_cost, ref)
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
@@ -1598,25 +1582,35 @@ def make_cost_computation_curve():
 
   plt.show()
 
+def test_dt_max():
+  dts = get_linear_spacing_with_max_dt(1, 0.01, 0.1, 20)
+
+  plt.plot(dts)
+  plt.show()
+
 if __name__ == "__main__":
+  # test_dt_max()
+
   # test_quadcopter()
   # test_linearization_quadcopter()
   # test_linearization_cstr()
   # test_linearization_batchreactor()
   # test_linearization_jerk()
 
-  # test_racecar()
-  # test_racecar_ref_path()
-
   # test_laplacian_dynamics()
+
+  # test_racecar()
+  test_racecar_ref_path()
+  
   # test_masspoint()
   # test_masspoint_ref_path()
-  # test_jerk_masspoint_ref_path()
 
   # test_unicycle()
-  test_unicycle_ref_path()
+  # test_unicycle_ref_path()
 
   # test_jerk_masspoint()
+  # test_jerk_masspoint_ref_path()
+
   # test_chain_of_masses()
   # test_cstr()
   # test_batch_reactor()

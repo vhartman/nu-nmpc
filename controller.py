@@ -1,4 +1,5 @@
 import numpy as np
+import jax
 
 import cvxpy as cp
 from scipy.interpolate import interp1d
@@ -46,7 +47,7 @@ class NMPC(Controller):
     self.state_scaling = np.array([1] * self.sys.state_dim)
 
     # solver params
-    self.sqp_iters = 4
+    self.sqp_iters = 3
     self.sqp_mixing = 0.8
 
     self.first_run = True
@@ -72,13 +73,20 @@ class NMPC(Controller):
 
   def compute_initial_control_guess(self):
     if self.first_run:
-      for i in range(self.N):
+      for _ in range(self.N):
         self.prev_u.append(np.zeros(self.input_dim))
 
       self.prev_u = np.array(self.prev_u).T
     else:
       # shift solution by one
-      self.prev_u = np.hstack((self.prev_u[:, 1:], self.prev_u[:, -1][:, None]))
+      # self.prev_u = np.hstack((self.prev_u[:, 1:], self.prev_u[:, -1][:, None]))
+
+      times = np.array([0] + list(np.cumsum(self.dts[:-1])))
+
+      f = interp1d(times, self.prev_u, axis=1, bounds_error=False, fill_value=self.prev_u[:, -1])
+      new_u = f(times + self.dts[0])
+
+      self.prev_u = new_u
 
   def compute(self, state, t):
     x = cp.Variable((self.state_dim, self.N+1))
@@ -216,7 +224,7 @@ class NMPC(Controller):
       # for i in range((self.N + 1)*2):
       cost += 50 * cp.sum(s)
 
-      cost = cost / 100
+      cost = cost / 10
 
       #cost = cp.sum_squares(10*(x[2, self.N] - target_angle))
       #cost += cp.sum_squares(10*(x[1, self.N] - target_angle))
@@ -231,7 +239,7 @@ class NMPC(Controller):
       u.value = self.prev_u
 
       # The optimal objective value is returned by `prob.solve()`.
-      result = prob.solve(solver='OSQP', eps_abs=1e-4, eps_rel=1e-6, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      result = prob.solve(solver='OSQP', eps_abs=1e-3, eps_rel=1e-4, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
@@ -252,7 +260,7 @@ class NMPC(Controller):
       print(u.value)
 
       # update solutions for linearization
-      # TODO: should really by a line search
+      # TODO: should really be a line search
       if self.first_run:
         self.prev_x = x.value
         self.prev_u = u.value
@@ -261,6 +269,17 @@ class NMPC(Controller):
         self.prev_u = u.value * self.sqp_mixing + self.prev_u * (1 - self.sqp_mixing)
 
       self.first_run = False
+
+      # data, _, _= prob.get_problem_data(cp.OSQP)
+
+      # print(data)
+
+      # print("A")
+      # print(data['A'].todense())
+      # np.savetxt("foo.csv", data["A"].todense(), delimiter=",")
+
+      # print("B")
+      # print(data['b'])
 
     if prob.status not in ["infeasible", "unbounded"]:
         print("U")
@@ -271,11 +290,59 @@ class NMPC(Controller):
 
     return np.zeros(self.sys.input_dim)
   
+#def get_relu_spacing(dt0, dt_max, T, steps):
+
+# def get_linear_spacing_with_max_dt(T, dt0, dt_max, steps):
+#   def find_k_and_alpha(T, dt_0, dt_max, n, initial_alpha_guess=1.0, tolerance=1e-6, max_iterations=1000):
+#     def calculate_k(alpha):
+#       return int(dt_max // alpha)
+
+#     def calculate_alpha(k):
+#       return (2 * (T - n * dt_0 - (n - k - 1) * dt_max)) / (k * (k + 1))
+
+#     alpha = initial_alpha_guess
+#     for iteration in range(max_iterations):
+#       k = calculate_k(alpha)
+#       new_alpha = calculate_alpha(k)
+      
+#       print(k , alpha, new_alpha)
+
+#       if abs(new_alpha - alpha) < tolerance:
+#         return k, new_alpha
+
+#       alpha = new_alpha
+
+#     raise ValueError("Convergence not achieved within the maximum number of iterations")
+  
+#   assert(dt_max >= dt0)
+
+#   _, alpha = find_k_and_alpha(T, dt0, (dt_max - dt0), steps, 0.01)
+#   return [min(dt0 + i * alpha, dt_max) for i in range(steps)]
+
+def get_linear_spacing(dt0, T, steps):
+  alpha = 2 *(T - steps * dt0) / (steps * (steps-1))
+  return [dt0 + i * alpha for i in range(steps)]
+
+def get_linear_spacing_v2(dt0, T, steps):
+  alpha = 2 *(T-dt0 - (steps-1) * dt0) / ((steps-1) * (steps-2))
+  return [dt0] + [dt0 + i * alpha for i in range(steps)]
+
 class NU_NMPC(Controller):
   def __init__(self, system, dts, quadratic_cost, reference):
-    self.nmpc = NMPC(system, len(dts), 0,quadratic_cost, reference)
+    self.nmpc = NMPC(system, len(dts), 0, quadratic_cost, reference)
 
     self.nmpc.dts = dts
 
   def compute(self, state, t):
     return self.nmpc.compute(state, t)
+
+class NMPCC(Controller):
+  def __init__(self, system, dts, mapping, reference):
+    self.sys = system
+    self.dts = dts
+
+    def error(q, theta):
+      return jax.norm(reference(theta) - mapping(q))
+
+  def compute(self, state, t):
+    pass

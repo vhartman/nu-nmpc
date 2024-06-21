@@ -10,8 +10,8 @@ class System:
     self.sys_jac = jax.jit(jax.jacfwd(self.f, argnums=0))
     self.input_jac = jax.jit(jax.jacfwd(self.f, argnums=1))
 
-    self.tmp = jax.jit(jax.jacfwd(self.step_euler, argnums=0))
-    self.tmp_inp = jax.jit(jax.jacfwd(self.step_euler, argnums=1))
+    self.tmp = jax.jit(jax.jacfwd(self.step_rk4, argnums=0))
+    self.tmp_inp = jax.jit(jax.jacfwd(self.step_rk4, argnums=1))
 
   def f(self, state, u):
     raise NotImplementedError("Implement me pls")
@@ -19,6 +19,8 @@ class System:
   def step(self, state, u, dt, method="euler"):
     if method == "euler":
       return self.step_euler(state, u, dt)
+    elif method == "rk4":
+      return self.step_rk4(state, u, dt)
     else:
       return self.step_heun(state, u, dt)
 
@@ -34,6 +36,20 @@ class System:
     tmp = state + dt * x_dot
     new_state = state + dt/2. * (x_dot + self.f(tmp, u))
     return new_state
+  
+  def step_rk4(self, state, u, dt_full):
+    steps = 2
+    x = state
+    dt = dt_full / steps
+    for _ in range(steps):
+      k1 = self.f ( x, u )
+      k2 = self.f ( x + dt * k1 / 2.0, u)
+      k3 = self.f ( x + dt * k2 / 2.0, u)
+      k4 = self.f ( x + dt * k3, u)
+
+      x = x + dt * ( k1 + 2.0 * k2 + 2.0 * k3 + k4 ) / 6.0
+
+    return x
 
   def A(self, x, u, dt):
     A_disc = self.sys_jac(x, u)
