@@ -3,19 +3,37 @@ import jax
 import jax.numpy as jnp
 from jax import grad, jacobian
 
+jax.config.update("jax_enable_x64", True)
+
 class System:
   def __init__(self):
     self.sys_jac = jax.jit(jax.jacfwd(self.f, argnums=0))
     self.input_jac = jax.jit(jax.jacfwd(self.f, argnums=1))
 
+    self.tmp = jax.jit(jax.jacfwd(self.step_euler, argnums=0))
+    self.tmp_inp = jax.jit(jax.jacfwd(self.step_euler, argnums=1))
+
   def f(self, state, u):
     raise NotImplementedError("Implement me pls")
 
-  def step(self, state, u, dt):
+  def step(self, state, u, dt, method="euler"):
+    if method == "euler":
+      return self.step_euler(state, u, dt)
+    else:
+      return self.step_heun(state, u, dt)
+
+  def step_euler(self, state, u, dt):
     x_dot = self.f(state, u)
     new_state = state + dt * x_dot
 
     return jnp.asarray(new_state)
+  
+  # heuns method
+  def step_heun(self, state, u, dt):
+    x_dot = self.f(state, u)
+    tmp = state + dt * x_dot
+    new_state = state + dt/2. * (x_dot + self.f(tmp, u))
+    return new_state
 
   def A(self, x, u, dt):
     A_disc = self.sys_jac(x, u)
@@ -28,25 +46,52 @@ class System:
   def K(self, x, u, dt):
     return self.A(x, u, dt) @ x[:, None] + self.B(x, u, dt) @ u[:, None] - dt * self.f(x, u)[:, None]
 
+  # f = f() + A(x-xref) + B(u-uref)
+  # xn = x + dt * (f() + A(x-xref) + B(u-uref))
   def linearization(self, x, u, dt):
-    A_disc = self.sys_jac(x, u)
-    B_disc = self.input_jac(x, u)
-    K = dt * (A_disc @ x[:, None] + B_disc @ u[:, None] - self.f(x, u)[:, None])
+    # A_disc = self.sys_jac(x, u)
+    # B_disc = self.input_jac(x, u)
+    # K = dt * (A_disc @ x[:, None] + B_disc @ u[:, None] - self.f(x, u)[:, None])
 
-    return A_disc * dt, B_disc * dt, K
+    # return A_disc*dt, B_disc * dt, K
+
+    A_disc = self.tmp(x, u, dt) - np.eye(len(x))
+    B_disc = self.tmp_inp(x, u, dt)
+    K = (A_disc @ x[:, None] + B_disc @ u[:, None] - dt * self.f(x, u)[:, None])
+
+    return A_disc, B_disc, K
 
 class Masspoint2D(System):
   def __init__(self):
     self.state_dim = 4
     self.input_dim = 2
 
-    self.state_limits = np.array([[-10, 10], [-10, 10], [-10, 10], [-10, 10]])
+    self.state_limits = np.array([[-10, 10], [-5, 5], [-10, 10], [-5, 5]])
     self.input_limits = np.array([[-5, 5], [-5, 5]])
 
     super().__init__()
 
   def f(self, state, u):
     return jnp.asarray([state[1], u[0], state[3], u[1]])
+  
+class JerkMasspoint2D(System):
+  def __init__(self):
+    self.state_dim = 6
+    self.input_dim = 2
+
+    self.state_limits = np.array([[-10, 10], # pos
+                                  [-1, 1], # vel
+                                  [-3, 3], # acc
+                                  [-10, 10], 
+                                  [-1, 1], 
+                                  [-3, 3]])
+    self.input_limits = np.array([[-50, 50], 
+                                  [-50, 50]])
+
+    super().__init__()
+
+  def f(self, state, u):
+    return jnp.asarray([state[1], state[2], u[0], state[4], state[5], u[1]])
 
 class LaplacianDynamics(System):
   def __init__(self):
@@ -191,10 +236,10 @@ class ChainOfMasses(System):
     self.dim = 2
     self.x0 = np.array([0, 0])
 
-    self.state_dim = num_masses * 2 * 2 + 2
+    self.state_dim = (num_masses + 1) * 2 + num_masses * 2
     self.input_dim = 2
 
-    self.state_limits = np.array([[-20, 20] * (num_masses * 2 * 2 + 2)])
+    self.state_limits = np.array([[-20, 20] * self.state_dim]).reshape(-1, 2)
     self.input_limits = np.array([[-1, 1], [-1, 1]])
 
     super().__init__()
@@ -238,7 +283,7 @@ class CSTR(System):
     self.state_dim = 4
     self.input_dim = 2
 
-    self.state_limits = np.array([[0.1, 2], [0.1, 2], [50, 140], [50, 140]])
+    self.state_limits = np.array([[0.1, 2], [0.1, 2], [50, 150], [50, 150]])
     self.input_limits = np.array([[5, 100], [-8500, 0.0]])
 
     super().__init__()
@@ -269,7 +314,7 @@ class CSTR(System):
     K_w = 4032.0 # [kj/h.m^2.K]
     C_A0 = (5.7+4.5)/2.0*1.0 # Concentration of A in input Upper bound 5.7 lower bound 4.5 [mol/l]
 
-    alpha = .95
+    alpha = 1.
     beta = 1.
 
     K_1 = beta * K0_ab * jnp.exp((-E_A_ab)/((T_R+273.15)))
@@ -283,35 +328,128 @@ class CSTR(System):
     T_R_dot = ((K_1*C_a*H_R_ab + K_2*C_b*H_R_bc + K_3*(C_a**2)*H_R_ad)/(-Rou*Cp)) + F*(T_in-T_R) +(((K_w*A_R)*(-T_dif))/(Rou*Cp*V_R))
     T_K_dot = (Q_dot + K_w*A_R*(T_dif))/(m_k*Cp_k)
 
-    return jnp.asarray([C_a_dot, C_b_dot, T_R_dot, T_K_dot])
+    return jnp.asarray([C_a_dot, C_b_dot, T_R_dot, T_K_dot], dtype=np.float64)
+  
+# taken from https://www.do-mpc.com/en/latest/example_gallery/batch_reactor.html
+class BatchBioreactor(System):
+  def __init__(self):
+    self.state_dim = 4
+    self.input_dim = 1
 
+    self.state_limits = np.array([[0, 3.7], [-0.01, 200], [0.0, 3.0], [0.0, 200]])
+    self.input_limits = np.array([[0, 0.2]])
 
+    super().__init__()
+  
+  def f(self, state, u):
+    X_s, S_s, P_s, V_s = state
+    inp = u[0]
+
+    mu_m  = 0.02
+    K_m   = 0.05
+    K_i   = 5.0
+    v_par = 0.004
+    Y_p   = 1.2
+
+    # Uncertain parameters:
+    Y_x  = 0.4
+    S_in = 200.
+
+    # Auxiliary term
+    mu_S = mu_m*S_s/(K_m+S_s+(S_s**2/K_i))
+
+    # Differential equations
+    X_s_dot = mu_S*X_s - inp/V_s*X_s
+    S_s_dot = -mu_S*X_s/Y_x - v_par*X_s/Y_p + inp/V_s*(S_in-S_s)
+    P_s_dot = v_par*X_s - inp/V_s*P_s
+    V_s_dot = inp
+
+    return jnp.asarray([X_s_dot, S_s_dot, P_s_dot, V_s_dot])
+
+# bicycle model from hliniger, ttps://arxiv.org/pdf/1711.07300
 class Racecar(System):
   def __init__(self):
-    # self.state_dim = 6
-    # self.input_dim = 2
+    self.state_dim = 6
+    self.input_dim = 2
 
-    # self.state_limits = np.array([[-20, 20], [-5, 20], [-20, 20], [-80, 80], [-80, 80], [-80, 80]])
-    # self.input_limits = np.array([[0, 2], [0, 2]])
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [0.3, 3.5], [-2, 2], [-7, 7]])
+    self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
+
+    # self.state_limits = np.array([[-20, 20], [-20, 20], [-10, 10], [0.3, 3.5], [-2, 2], [-7, 7]])
+    # self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
 
     super().__init__()
 
   def f(self, state, u):
-    pass
-    # x = state
+    x, y, phi, v_x, v_y, omega = state
+    d, delta = u
+    
+    # v_x = jnp.max(jnp.asarray([v_x, 0.3]))
 
-    # # First derivative, xdot = [vy, vz, phidot, ay, az, phidotdot]
-    # g     = 9.81    # Gravitational acceleration (m/s^2)
-    # m     = 0.18    # Mass (kg)
-    # Ixx   = 0.00025 # Mass moment of inertia (kg*m^2)
-    # L     = 0.086   # Arm length (m)
+    m = 0.041
+    I_z = 27.8e-6
+    l_f = 0.029
+    l_r = 0.033
 
-    # F = u[0] + u[1]
-    # M = (u[1] - u[0]) * L
+    C_m_1 = 0.287
+    C_m_2 = 0.0545
+    Cr0 = 0.0518
+    Cr2 = 0.00035
 
-    # return jnp.asarray([x[3],
-    #         x[4],
-    #         x[5],
-    #         -F * jnp.sin(x[2]) / m,
-    #         F * jnp.cos(x[2]) / m - g,
-    #         M / Ixx])
+    B_r = 3.3852
+    C_r = 1.2691
+    D_r = 0.1737
+
+    B_f = 2.579
+    C_f = 1.2
+    D_f = 0.192
+
+    alpha_f = -jnp.arctan2((omega * l_f + v_y), v_x) + delta
+    F_f_y = D_f * jnp.sin(C_f * jnp.arctan(B_f*alpha_f))
+
+    alpha_r = jnp.arctan2((omega*l_r - v_y), v_x)
+    F_r_y = D_r * jnp.sin(C_r * jnp.arctan(B_r*alpha_r))
+
+    F_r_x = (C_m_1 - C_m_2 * v_x)*d - Cr0 - Cr2*v_x**2
+
+    x_dot = v_x * jnp.cos(phi) - v_y * jnp.sin(phi)
+    y_dot = v_x * jnp.sin(phi) + v_y * jnp.cos(phi)
+    phi_dot = omega
+    v_x_dot = 1/m * (F_r_x - F_f_y * jnp.sin(delta) + m*v_y*omega)
+    # print("vxd")
+    # print(v_x_dot)
+    # print(F_r_x)
+    v_y_dot = 1/m * (F_r_y + F_f_y * jnp.cos(delta) - m*v_x*omega)
+    omega_dot = 1/I_z * (F_f_y * l_f*jnp.cos(delta) - F_r_y * l_r)
+
+    # print("ff")
+    # print(F_f_y)
+    # print(-F_r_y)
+    # print(omega_dot)
+
+    return jnp.asarray([x_dot, y_dot, phi_dot, v_x_dot, v_y_dot, omega_dot])
+  
+
+class Unicycle(System):
+  def __init__(self):
+    self.state_dim = 3
+    self.input_dim = 2
+
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-10, 10]])
+    self.input_limits = np.array([[-0.1, 5], [-3, 3]])
+
+    # self.state_limits = np.array([[-20, 20], [-20, 20], [-10, 10], [0.3, 3.5], [-2, 2], [-7, 7]])
+    # self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
+
+    super().__init__()
+
+  def f(self, state, u):
+    x, y, theta = state
+    us, uw = u
+
+    x_dot = us * jnp.cos(theta)
+    y_dot = us * jnp.sin(theta)
+    theta_dot = uw
+
+    return jnp.asarray([x_dot, y_dot, theta_dot])
+  
