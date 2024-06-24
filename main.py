@@ -41,6 +41,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     times.append(times[-1] + dt_sim)
 
     computation_times_ms.append((end - start) / 1e6)
+    # computation_times_ms = 
 
   return times, states, inputs, computation_times_ms
 
@@ -244,13 +245,20 @@ def test_masspoint():
   dts = get_linear_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
+  blocks = get_linear_blocking(20, 10)
+  mb_mpc = MoveBlockingNMPC(sys, 20, dt, quadratic_cost, ref, blocks)
+
   nmpc_control = lambda x, t: nmpc.compute(x, t)
   numpc_control = lambda x, t: nu_mpc.compute(x, t)
+  mbnmpc_control = lambda x, t: mb_mpc.compute(x, t)
 
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  # mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
+  # nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mb_mpc_sol = eval(sys, mbnmpc_control, x, T_sim, dt)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  # for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol, mb_mpc_sol]:
+  for times, states, inputs, computation_times in [mb_mpc_sol]:
+  # for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
     plt.figure()
     plt.plot(times, states, label=['x', 'v_x', 'y', 'v_y'])
     plt.legend()
@@ -278,7 +286,7 @@ def squircle(t):
   return np.array([x, 0, y, 0]).reshape((-1, 1))
 
 def square(t):
-  t = (t) % 4
+  t = (float(t)) % 4
   side_length = 1  # Total side length of the square
   half_side = side_length / 2
   x = np.piecewise(t,
@@ -300,15 +308,15 @@ def square(t):
   # return np.array([x, y, 0, 0, 0, 0]).reshape((-1, 1))
 
 def test_masspoint_ref_path():
-  T_sim = 8
+  T_sim = 4
 
   sys = Masspoint2D()
   x = np.zeros(4)
   x[2] = 5
   u = np.zeros(2)
 
-  Q = np.diag([1, 0, 1, 0])
-  R = np.diag([.1, .1])
+  Q = np.diag([10, 0.01, 10, 0.01])
+  R = np.diag([.01, .01])
 
   ref = lambda t: np.array([square(t)[0], 0, square(t)[1], 0]).reshape(-1, 1)
 
@@ -317,7 +325,7 @@ def test_masspoint_ref_path():
   quadratic_cost = QuadraticCost(Q, R, Q * 0.01)
 
   dt = 0.01
-  nmpc = NMPC(sys, 5, dt*20, quadratic_cost, ref)
+  nmpc = NMPC(sys, 10, dt*10, quadratic_cost, ref)
 
   dts = get_linear_spacing(dt, 100 * dt, 5)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
@@ -580,24 +588,27 @@ def test_racecar_ref_path():
   u = np.zeros(2)
 
   # cost from liniger implementation
-  Q = np.diag([10, 10, 0.0001, 0.0001, 0.0001, 0.0001])
+  Q = np.diag([1, 1, 0.0000, 0.0000, 0.0000, 0.0000])
   # ref[3] = 0.3
   R = np.diag([0.001, 0.001])
 
   ref = lambda t: np.array([square(t)[0], square(t)[1], 0, 0, 0, 0]).reshape(-1, 1)
 
   x = ref(0).flatten()
-  x = np.array([0.5, -0.5, np.pi/2, 0.5, 0, 0])
+  x = np.array([0.5, -0.5, np.pi/2, 2, 0, 0])
 
   # Q = np.diag([1, 1, 0, 0, 0, 0])
   # ref = np.zeros((6, 1))
   # ref[3] = 0.3
   # R = np.diag([0.1, 0.1])
 
-  quadratic_cost = QuadraticCost(Q, R, Q)
+  quadratic_cost = QuadraticCost(Q, R, Q * 0.01)
 
   state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5]))
   input_scaling = 1 / (np.array([1, 0.35]))
+  
+  # state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5]))
+  # input_scaling = 1 / (np.array([1, 0.35]))
   
   # state_scaling = 1 / np.array([1, 1, 2*np.pi, 10, 10, 5])
   # input_scaling = 1 / np.array([1, 0.5])
@@ -1600,9 +1611,9 @@ if __name__ == "__main__":
   # test_laplacian_dynamics()
 
   # test_racecar()
-  test_racecar_ref_path()
+  # test_racecar_ref_path()
   
-  # test_masspoint()
+  test_masspoint()
   # test_masspoint_ref_path()
 
   # test_unicycle()
