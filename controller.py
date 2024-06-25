@@ -228,7 +228,7 @@ class NMPC(Controller):
 
       # cost = cost * 10
       # cost = cost / 1000
-      # cost = cost * 10 
+      cost = cost * 100
 
       # slack variables
       for i in range(self.N):
@@ -236,8 +236,8 @@ class NMPC(Controller):
         cost += dt * 5 * cp.sum(s[:, (i+1)*2])
         cost += dt * 5 * cp.sum(s[:, (i+1)*2+1])
 
-        cost += dt * 10 * cp.sum_squares(s[:, (i+1)*2])
-        cost += dt * 10 * cp.sum_squares(s[:, (i+1)*2+1])
+        cost += dt * 100 * cp.sum_squares(s[:, (i+1)*2])
+        cost += dt * 100 * cp.sum_squares(s[:, (i+1)*2+1])
 
       objective = cp.Minimize(cost)
 
@@ -248,10 +248,10 @@ class NMPC(Controller):
       u.value = self.prev_u
 
       # The optimal objective value is returned by `prob.solve()`.
-      # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-3, eps_rel=1e-6, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-8, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
-      result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
+      # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
       # result = prob.solve(solver='PIQP', verbose=True)
 
       # options_cvxopt = {
