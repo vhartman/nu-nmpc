@@ -9,6 +9,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.transforms as transforms
 
+from collections import namedtuple
+
+ControllerResult = namedtuple('Result', ['times', 'states', 'inputs', 'solver_time', 'computation_time'])
+
 def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
   xn = x0
   t0 = 0.
@@ -23,7 +27,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     # print("x0")
     # print(xn)
     # print(system.step(xn, np.zeros(system.input_dim), dt_sim, method='heun'))
-    t = t0 = j * dt_sim
+    t = t0 + j * dt_sim
 
     start = time.process_time_ns()
     u = controller(xn, t)
@@ -43,7 +47,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     computation_times_ms.append((end - start) / 1e6)
     # computation_times_ms = 
 
-  return times, states, inputs, computation_times_ms
+  return ControllerResult(states, inputs, 0, computation_times_ms)
 
 def double_cartpole_test():
   T_sim = 5
@@ -87,7 +91,12 @@ def double_cartpole_test():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
-  for times, states, inputs, computation_times in [nu_mpc_sol]:
+  for res in [nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
     plt.figure()
     plt.plot(times, states, label=["x", "a1", "a2", "v", "a1_v", "a2_v"])
     plt.legend()
@@ -147,7 +156,12 @@ def cartpole_test():
   mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
     plt.figure()
     plt.plot(times, states, label=['x', 'v', 'theta', 'w'])
     plt.legend()
@@ -204,7 +218,12 @@ def test_laplacian_dynamics():
   mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
     plt.figure()
     plt.plot(times, states, label=['x', 'y', 'z'])
     plt.legend()
@@ -252,13 +271,18 @@ def test_masspoint():
   numpc_control = lambda x, t: nu_mpc.compute(x, t)
   mbnmpc_control = lambda x, t: mb_mpc.compute(x, t)
 
-  # mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  # nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
   mb_mpc_sol = eval(sys, mbnmpc_control, x, T_sim, dt)
 
-  # for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol, mb_mpc_sol]:
-  for times, states, inputs, computation_times in [mb_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol, mb_mpc_sol]:
+  # for times, states, inputs, computation_times in [mb_mpc_sol]:
   # for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
     plt.figure()
     plt.plot(times, states, label=['x', 'v_x', 'y', 'v_y'])
     plt.legend()
@@ -336,7 +360,12 @@ def test_masspoint_ref_path():
   mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+    
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][2] for i in range(len(times))]
 
@@ -407,7 +436,12 @@ def test_jerk_masspoint():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][3] for i in range(len(times))]
 
@@ -475,7 +509,12 @@ def test_jerk_masspoint_ref_path():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][3] for i in range(len(times))]
 
@@ -553,7 +592,12 @@ def test_racecar():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+    
     plt.figure()
     plt.plot(times, states, label=['x', 'y', 'omega', 'vx', 'vy', 'omega_dot'])
     plt.legend()
@@ -590,7 +634,7 @@ def test_racecar_ref_path():
   # cost from liniger implementation
   Q = np.diag([1, 1, 0.0000, 0.0000, 0.0000, 0.0000])
   # ref[3] = 0.3
-  R = np.diag([0.001, 0.001])
+  R = np.diag([0.01, 0.01])
 
   ref = lambda t: np.array([square(t)[0], square(t)[1], 0, 0, 0, 0]).reshape(-1, 1)
 
@@ -618,7 +662,7 @@ def test_racecar_ref_path():
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
-  dts = get_linear_spacing(dt, 30 * dt, 10)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
   # dts = get_linear_spacing_v2(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
@@ -632,7 +676,12 @@ def test_racecar_ref_path():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][1] for i in range(len(times))]
 
@@ -736,7 +785,12 @@ def test_unicycle():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][1] for i in range(len(times))]
 
@@ -809,7 +863,12 @@ def test_unicycle_ref_path():
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][1] for i in range(len(times))]
 
@@ -907,7 +966,12 @@ def test_quadcopter():
   print("NU-MPC")
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
     plt.figure()
     plt.plot(times, states, label=["x", "y", "phi", "v_x", "v_y", "phi_dot"])
     plt.legend()
@@ -985,7 +1049,12 @@ def test_chain_of_masses():
   mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
     plt.figure()
     plt.plot(times, states)
     plt.legend()
@@ -1053,7 +1122,12 @@ def test_cstr():
   mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
     plt.figure()
     plt.plot(times, states, label=['C_a', 'C_b', 'T_R', 'T_K'])
     plt.legend()
@@ -1119,7 +1193,12 @@ def test_batch_reactor():
   print("Starting sim for numpc")
   nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt, 100)
 
-  for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
     plt.figure()
     plt.plot(times, states, label=['X_S', 'S_s', 'P_s', 'V_s'])
     plt.legend()
@@ -1142,7 +1221,6 @@ def test_batch_reactor():
 
 def main():
     pass
-
 
 def test_linearization_batchreactor():
   sys = BatchBioreactor()
@@ -1573,7 +1651,12 @@ def make_cost_computation_curve():
       print("NU-MPC")
       nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
 
-      for j, (times, states, inputs, computation_times) in enumerate([mpc_sol, nu_mpc_sol]):
+      for j, res in enumerate([mpc_sol, nu_mpc_sol]):
+        times = res.times
+        states = res.states
+        inputs = res.inputs
+        computation_times = res.computation_time
+
         cost = 0
         for i in range(len(states)-1):
           diff = (states[i][:, None] - ref)
@@ -1602,7 +1685,7 @@ def test_dt_max():
 if __name__ == "__main__":
   # test_dt_max()
 
-  # test_quadcopter()
+  test_quadcopter()
   # test_linearization_quadcopter()
   # test_linearization_cstr()
   # test_linearization_batchreactor()
@@ -1613,7 +1696,7 @@ if __name__ == "__main__":
   # test_racecar()
   # test_racecar_ref_path()
   
-  test_masspoint()
+  # test_masspoint()
   # test_masspoint_ref_path()
 
   # test_unicycle()

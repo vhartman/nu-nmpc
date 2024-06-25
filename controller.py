@@ -227,7 +227,7 @@ class NMPC(Controller):
       cost += 500 * cp.sum(s)
 
       # cost = cost * 100
-      cost = cost / 100
+      cost = cost / 1000
 
       #cost = cp.sum_squares(10*(x[2, self.N] - target_angle))
       #cost += cp.sum_squares(10*(x[1, self.N] - target_angle))
@@ -242,7 +242,7 @@ class NMPC(Controller):
       u.value = self.prev_u
 
       # The optimal objective value is returned by `prob.solve()`.
-      result = prob.solve(solver='OSQP', eps_abs=1e-3, eps_rel=1e-3, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-3, eps_rel=1e-3, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
@@ -582,7 +582,7 @@ class MoveBlockingNMPC(Controller):
       u.value = self.prev_u
 
       # The optimal objective value is returned by `prob.solve()`.
-      result = prob.solve(solver='OSQP', eps_abs=1e-3, eps_rel=1e-3, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-3, eps_rel=1e-3, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
