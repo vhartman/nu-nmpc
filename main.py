@@ -318,9 +318,6 @@ def square(t):
                 lambda t: -half_side])
   
   return np.array([x, y])
-  # return np.array([x, 0, 0, y, 0, 0]).reshape((-1, 1))
-  # return np.array([x, y, 0]).reshape((-1, 1))
-  # return np.array([x, y, 0, 0, 0, 0]).reshape((-1, 1))
 
 def test_masspoint_ref_path():
   T_sim = 4
@@ -800,30 +797,23 @@ def test_unicycle_ref_path():
   Q = np.diag([10, 10, 0])
   R = np.diag([0.001, 0.001])
   ref = lambda t: np.array([square(t)[0], square(t)[1], 0]).reshape(-1, 1)
-
-  x = ref(0).flatten()
   x = np.array([0.5, -0.5, np.pi/2])
 
-  # Q = np.diag([1, 1, 0, 0, 0, 0])
-  # ref = np.zeros((6, 1))
-  # ref[3] = 0.3
-  # R = np.diag([0.1, 0.1])
-
-  quadratic_cost = QuadraticCost(Q, R, Q)
+  quadratic_cost = QuadraticCost(Q, R, 0.1 * Q)
 
   state_scaling = 1 / (np.array([1, 1, 1]))
-  input_scaling = 1 / (np.array([1, 1]))
-  
-  # state_scaling = 1 / np.array([1, 1, 2*np.pi, 10, 10, 5])
-  # input_scaling = 1 / np.array([1, 0.5])
+  input_scaling = 1 / (np.array([5, 3]))
 
+  # nmpc = NMPC(sys, 10, dt*2, quadratic_cost, ref)
   nmpc = NMPC(sys, 20, dt, quadratic_cost, ref)
 
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
   dts = get_linear_spacing(dt, 20 * dt, 10)
-  # dts = get_linear_spacing_v2(dt, 20 * dt, 10)
+  # dts = get_power_spacing(dt, 20*dt, 10)
+
+  # dts = [dt] + [19 * dt / 9 for _ in range(9)]
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
   nu_mpc.nmpc.state_scaling = state_scaling
@@ -832,7 +822,6 @@ def test_unicycle_ref_path():
   mpc_sol = eval(sys, nmpc, x, T_sim, dt)
   nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
-  # for times, states, inputs, computation_times in [mpc_sol]:
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
     states = res.states
@@ -1644,11 +1633,11 @@ if __name__ == "__main__":
   # test_racecar()
   # test_racecar_ref_path()
   
-  test_masspoint()
+  # test_masspoint()
   # test_masspoint_ref_path()
 
   # test_unicycle()
-  # test_unicycle_ref_path()
+  test_unicycle_ref_path()
 
   # test_jerk_masspoint()
   # test_jerk_masspoint_ref_path()
