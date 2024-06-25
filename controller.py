@@ -111,6 +111,8 @@ class NMPC(Controller):
     print("state")
     print(self.prev_x)
 
+    self.solve_time = 0
+
     # scaling:
     # xs = S @ x
     # us = W @ u
@@ -273,6 +275,8 @@ class NMPC(Controller):
 
       self.first_run = False
 
+      self.solve_time += prob.solver_stats.solve_time
+
       # data, _, _= prob.get_problem_data(cp.OSQP)
 
       # print(data)
@@ -337,7 +341,9 @@ class NU_NMPC(Controller):
     self.nmpc.dts = dts
 
   def compute(self, state, t):
-    return self.nmpc.compute(state, t)
+    res = self.nmpc.compute(state, t)
+    self.solve_time = self.nmpc.solve_time
+    return res
 
 class NMPCC(Controller):
   def __init__(self, system, dts, mapping, reference):
@@ -460,6 +466,8 @@ class MoveBlockingNMPC(Controller):
 
     # Q' = Sinv^T @ Q @ Sinv
     # R' = Winv^T @ R # Winv
+
+    self.solve_time = 0
 
     # dynamics constraints
     for k in range(self.sqp_iters):
@@ -624,7 +632,7 @@ class MoveBlockingNMPC(Controller):
       # print("B")
       # print(data['b'])
 
-      self.solve_time = prob.solver_stats.solve_time
+      self.solve_time += prob.solver_stats.solve_time
 
     if prob.status not in ["infeasible", "unbounded"]:
         print("U")

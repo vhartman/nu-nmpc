@@ -22,6 +22,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
 
   times = [0]
   computation_times_ms = []
+  solve_times = []
 
   for j in range(int(T_sim / dt_sim)):
     # print("x0")
@@ -45,9 +46,9 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     times.append(times[-1] + dt_sim)
 
     computation_times_ms.append((end - start) / 1e6)
-    # computation_times_ms = 
+    solve_times.append(controller.solve_time) 
 
-  return ControllerResult(times, states, inputs, 0, computation_times_ms)
+  return ControllerResult(times, states, inputs, solve_times, computation_times_ms)
 
 def double_cartpole_test():
   T_sim = 5
@@ -279,6 +280,9 @@ def test_masspoint():
 
     plt.figure()
     plt.plot(computation_times)
+
+    plt.figure()
+    plt.plot(res.solver_time)
 
     cost = 0
     for i in range(len(states)-1):
@@ -1592,13 +1596,8 @@ def make_cost_computation_curve():
       nu_mpc.nmpc.state_scaling = state_scaling
       nu_mpc.nmpc.input_scaling = input_scaling
 
-      nmpc_control = lambda x, t: nmpc.compute(x, t)
-      numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-      print("NMPC")
-      mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-      print("NU-MPC")
-      nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+      mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+      nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
       for j, res in enumerate([mpc_sol, nu_mpc_sol]):
         times = res.times
@@ -1634,7 +1633,7 @@ def test_dt_max():
 if __name__ == "__main__":
   # test_dt_max()
 
-  test_quadcopter()
+  # test_quadcopter()
   # test_linearization_quadcopter()
   # test_linearization_cstr()
   # test_linearization_batchreactor()
@@ -1645,7 +1644,7 @@ if __name__ == "__main__":
   # test_racecar()
   # test_racecar_ref_path()
   
-  # test_masspoint()
+  test_masspoint()
   # test_masspoint_ref_path()
 
   # test_unicycle()
