@@ -30,7 +30,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     t = t0 + j * dt_sim
 
     start = time.process_time_ns()
-    u = controller(xn, t)
+    u = controller.compute(xn, t)
     end = time.process_time_ns()
 
     # finer simulation
@@ -47,7 +47,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     computation_times_ms.append((end - start) / 1e6)
     # computation_times_ms = 
 
-  return ControllerResult(states, inputs, 0, computation_times_ms)
+  return ControllerResult(times, states, inputs, 0, computation_times_ms)
 
 def double_cartpole_test():
   T_sim = 5
@@ -84,11 +84,8 @@ def double_cartpole_test():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  # mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  # mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
   for res in [nu_mpc_sol]:
@@ -150,11 +147,8 @@ def cartpole_test():
   dts = get_linear_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
@@ -212,11 +206,8 @@ def test_laplacian_dynamics():
   dts = get_linear_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
@@ -267,13 +258,9 @@ def test_masspoint():
   blocks = get_linear_blocking(20, 10)
   mb_mpc = MoveBlockingNMPC(sys, 20, dt, quadratic_cost, ref, blocks)
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-  mbnmpc_control = lambda x, t: mb_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
-  mb_mpc_sol = eval(sys, mbnmpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  mb_mpc_sol = eval(sys, mb_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol, mb_mpc_sol]:
   # for times, states, inputs, computation_times in [mb_mpc_sol]:
@@ -354,11 +341,8 @@ def test_masspoint_ref_path():
   dts = get_linear_spacing(dt, 100 * dt, 5)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
@@ -429,11 +413,8 @@ def test_jerk_masspoint():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
   for res in [mpc_sol, nu_mpc_sol]:
@@ -502,11 +483,8 @@ def test_jerk_masspoint_ref_path():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
   for res in [mpc_sol, nu_mpc_sol]:
@@ -585,11 +563,8 @@ def test_racecar():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
   for res in [mpc_sol, nu_mpc_sol]:
@@ -669,11 +644,8 @@ def test_racecar_ref_path():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
   for res in [mpc_sol, nu_mpc_sol]:
@@ -778,11 +750,8 @@ def test_unicycle():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
   for res in [mpc_sol, nu_mpc_sol]:
@@ -856,11 +825,8 @@ def test_unicycle_ref_path():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
   for res in [mpc_sol, nu_mpc_sol]:
@@ -958,13 +924,8 @@ def test_quadcopter():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  print("NMPC")
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  print("NU-MPC")
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
@@ -1043,11 +1004,8 @@ def test_chain_of_masses():
   dts = get_linear_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
@@ -1116,11 +1074,8 @@ def test_cstr():
   dts = get_linear_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
@@ -1184,14 +1139,8 @@ def test_batch_reactor():
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  nmpc_control = lambda x, t: nmpc.compute(x, t)
-  numpc_control = lambda x, t: nu_mpc.compute(x, t)
-
-  print("Starting sim for nmpc")
-  mpc_sol = eval(sys, nmpc_control, x, T_sim, dt, 100)
-
-  print("Starting sim for numpc")
-  nu_mpc_sol = eval(sys, numpc_control, x, T_sim, dt, 100)
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
   for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
