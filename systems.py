@@ -38,7 +38,7 @@ class System:
     return new_state
   
   def step_rk4(self, state, u, dt_full):
-    steps = 2
+    steps = 5
     x = state
     dt = dt_full / steps
     for _ in range(steps):
@@ -71,9 +71,15 @@ class System:
 
     # return A_disc*dt, B_disc * dt, K
 
-    A_disc = self.tmp(x, u, dt) - np.eye(len(x))
+    # A_disc = self.tmp(x, u, dt) - np.eye(len(x))
+    # B_disc = self.tmp_inp(x, u, dt)
+    # K = (A_disc @ x[:, None] + B_disc @ u[:, None] - dt * self.f(x, u)[:, None])
+
+    # return A_disc, B_disc, K
+
+    A_disc = self.tmp(x, u, dt)
     B_disc = self.tmp_inp(x, u, dt)
-    K = (A_disc @ x[:, None] + B_disc @ u[:, None] - dt * self.f(x, u)[:, None])
+    K = (A_disc @ x[:, None] + B_disc @ u[:, None] - self.step_rk4(x, u, dt)[:, None])
 
     return A_disc, B_disc, K
 
