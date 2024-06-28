@@ -38,12 +38,12 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     for i in range(N_sim_iter):
       xn = system.step(xn, u, dt_sim/N_sim_iter, method='heun')
 
-    #xn += np.random.randn(4) * 0.0001
+      #xn += np.random.randn(4) * 0.0001
 
-    states.append(xn)
-    inputs.append(u)
+      states.append(xn)
+      inputs.append(u)
 
-    times.append(times[-1] + dt_sim)
+      times.append(times[-1] + dt_sim / N_sim_iter)
 
     computation_times_ms.append((end - start) / 1e6)
     solve_times.append(controller.solve_time) 
@@ -239,7 +239,7 @@ def test_laplacian_dynamics():
 def test_masspoint():
   T_sim = 3
 
-  sys = Masspoint2D()
+  sys = MasspointND(2)
   x = np.zeros(4)
   x[2] = 5
   u = np.zeros(2)
@@ -319,10 +319,15 @@ def square(t):
   
   return np.array([x, y])
 
+def figure_eight(t, r=1):
+  x = np.sin(t) * r
+  y = np.sin(t) * np.cos(t) * r
+  return np.array([x, y])
+
 def test_masspoint_ref_path():
   T_sim = 4
 
-  sys = Masspoint2D()
+  sys = MasspointND()
   x = np.zeros(4)
   x[2] = 5
   u = np.zeros(2)
@@ -330,7 +335,7 @@ def test_masspoint_ref_path():
   Q = np.diag([10, 0.01, 10, 0.01])
   R = np.diag([.01, .01])
 
-  ref = lambda t: np.array([square(t)[0], 0, square(t)[1], 0]).reshape(-1, 1)
+  ref = lambda t: np.array([figure_eight(t)[0], 0, figure_eight(t)[1], 0]).reshape(-1, 1)
   x = ref(0).flatten()
 
   quadratic_cost = QuadraticCost(Q, R, Q * 0.01)
@@ -366,8 +371,12 @@ def test_masspoint_ref_path():
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][2] for i in range(len(times))]
 
+    x_ref = [ref(times[i])[0] for i in range(len(times))]
+    y_ref = [ref(times[i])[2] for i in range(len(times))]
+
     plt.figure()
     plt.plot(x, y)
+    plt.plot(x_ref, y_ref, '--', color='tab:orange')
     
     plt.figure()
     plt.plot(times, states, label=['x', 'v_x', 'y', 'v_y'])
@@ -393,7 +402,7 @@ def test_jerk_masspoint():
   T_sim = 3
   dt = 0.05
 
-  sys = JerkMasspoint2D()
+  sys = JerkMasspointND(2)
   x = np.zeros(6)
   x[0] = 2
   x[1] = 0
@@ -402,13 +411,13 @@ def test_jerk_masspoint():
 
   u = np.zeros(2)
 
-  Q = np.diag([20, 0.01, 0.01, 20, 0.01, 0.01])
+  Q = np.diag([10, 0.01, 0.01, 10, 0.01, 0.01])
   ref = np.zeros((6, 1))
   R = np.diag([.001, .001])
 
   quadratic_cost = QuadraticCost(Q, R, Q)
 
-  state_scaling = 1 / (np.array([5, 5, 10, 5, 5, 10]))
+  state_scaling = 1 / (np.array([5, 1, 3, 5, 1, 3]))
   input_scaling = 1 / (np.array([50, 50]))
   
   # state_scaling = 1 / np.array([1, 1, 1, 1, 1, 1])
@@ -466,7 +475,7 @@ def test_jerk_masspoint_ref_path():
   T_sim = 5
   dt = 0.05
 
-  sys = JerkMasspoint2D()
+  sys = JerkMasspointND(2)
   
   u = np.zeros(2)
 
@@ -624,10 +633,11 @@ def test_racecar_ref_path():
   # ref[3] = 0.3
   R = np.diag([0.01, 0.01])
 
-  ref = lambda t: np.array([square(t)[0], square(t)[1], 0, 0, 0, 0]).reshape(-1, 1)
+  ref = lambda t: np.array([figure_eight(t*2)[0], figure_eight(t*2)[1], 0, 0, 0, 0]).reshape(-1, 1)
 
   x = ref(0).flatten()
-  x = np.array([0.5, -0.5, np.pi/2, 0.5, 0, 0])
+  x[3] = 0.5
+  # x = np.array([0.5, -0.5, np.pi/2, 0.5, 0, 0])
 
   # Q = np.diag([1, 1, 0, 0, 0, 0])
   # ref = np.zeros((6, 1))
@@ -650,7 +660,7 @@ def test_racecar_ref_path():
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
-  dts = get_linear_spacing(dt, 20 * dt, 10)
+  dts = get_linear_spacing(dt, 40 * dt, 20)
   # dts = get_linear_spacing_v2(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
@@ -908,7 +918,7 @@ def test_quadcopter():
   x[5] = -10
 
   u = np.zeros(2) - 0
-  dt = 0.05
+  dt = 0.2
 
   quadratic_cost = QuadraticCost(Q, R, 0.1 * Q)
 
@@ -1506,7 +1516,7 @@ def test_linearization_quadcopter():
 def test_linearization_jerk():
   dt = 0.1
 
-  sys = JerkMasspoint2D()
+  sys = JerkMasspointND(2)
   x = np.zeros(6)
   x[0] = 2
   x[1] = 0
@@ -1587,13 +1597,12 @@ def test_linearization_jerk():
   plt.show()
 
 class Problem:
-  def __init__(self, sys, Q, ref, R, x0, T):
+  def __init__(self, sys, cost, ref, x0, T):
     self.T = T
     self.sys = sys
     
-    self.Q = Q
+    self.cost = cost
     self.ref = ref
-    self.R = R
 
     self.x0 = x0
 
@@ -1633,7 +1642,7 @@ def make_cost_computation_curve():
     # ks = [5, 7, 10, 12, 15, 20]
     ks = [5, 7, 10]
 
-    sys = Masspoint2D()
+    sys = MasspointND(2)
     x = np.zeros(4)
     x[2] = 5
     u = np.zeros(2)
@@ -1708,6 +1717,274 @@ def make_cost_computation_curve():
 
   plt.show()
 
+def make_T_curve():
+  if False:
+    ks = [5, 7, 10, 12, 15, 20]
+
+    T_sim = 3
+
+    sys = Quadcopter2D()
+
+    Q = np.diag([1, 1, 1, 0.01, 0.01, 0.01])
+    ref = np.zeros((6, 1))
+    R = np.diag([.01, .01])
+
+    x = np.zeros(6)
+    x[0] = 3
+    x[1] = 0
+    x[2] = np.pi
+    x[5] = -10
+
+    u = np.zeros(2) - 0
+    dt = 0.05
+
+    state_scaling = 1 / np.array([1., 1, 1, 10, 10, 10])
+    input_scaling = 1 / np.array([2, 2])
+  elif True:
+    T_sim = 5
+    dt = 0.05
+
+    sys = JerkMasspointND(2)
+    x = np.zeros(6)
+    x[0] = 2
+    x[1] = 0
+    x[2] = 0
+    x[3] = 5
+
+    u = np.zeros(2)
+
+    Q = np.diag([10, 0.01, 0.01, 10, 0.01, 0.01])
+    ref = np.zeros((6, 1))
+    R = np.diag([.001, .001])
+
+    quadratic_cost = QuadraticCost(Q, R, Q)
+
+    state_scaling = 1 / (np.array([5, 1, 3, 5, 1, 3]))
+    input_scaling = 1 / (np.array([50, 50]))
+  elif True:
+    T_sim = 3
+
+    sys = MasspointND(2)
+    x = np.zeros(4)
+    x[2] = 5
+    u = np.zeros(2)
+
+    Q = np.diag([1, 0, 1, 0])
+    ref = np.zeros((4, 1))
+    R = np.diag([.1, .1])
+
+    dt = 0.1
+
+    state_scaling = 1 / np.array([1, 1, 1, 1])
+    input_scaling = 1 / np.array([5, 5])
+  else:
+    ks = [5, 7, 10, 12, 15, 20]
+
+    T_sim = 4
+    sys = Cartpole()
+    x = np.zeros(4)
+    x[2] = 0
+    u = np.zeros(1)
+    dt = 0.05
+
+    Q = np.diag([1, 0, 3, 0])
+    ref = np.zeros((4, 1))
+    ref[2, 0] = np.pi
+
+    R = np.diag([.1])
+
+    state_scaling = 1 / np.array([1, 1, 10, 10])
+    input_scaling = 1 / np.array([50])
+
+  quadratic_cost = QuadraticCost(Q, R, Q * 0.1)
+
+  for T in [0.2, 0.5, 0.7, 1, 2]:
+    k = int(T / dt)
+    nmpc = NMPC(sys, k, T / k, quadratic_cost, ref)
+    nmpc.state_scaling = state_scaling
+    nmpc.input_scaling = input_scaling
+
+    #dts = get_relu_spacing(dt, 30 * dt, 15)
+    dts = get_linear_spacing(dt, T, k)
+    # nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+
+    # nu_mpc.nmpc.state_scaling = state_scaling
+    # nu_mpc.nmpc.input_scaling = input_scaling
+
+    mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+    # nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+
+    for j, res in enumerate([mpc_sol]):
+    # for j, res in enumerate([mpc_sol, nu_mpc_sol]):
+      times = res.times
+      states = res.states
+      inputs = res.inputs
+      computation_times = res.computation_time
+
+      cost = 0
+      for i in range(len(states)-1):
+        diff = (states[i][:, None] - ref)
+        u = inputs[i][:, None]
+        cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+      print(cost)
+      print(sum(computation_times))
+
+      if j==0:
+        plt.scatter(k, cost, marker='o', color="tab:blue")
+      else:
+        plt.scatter(k, cost, marker='s', color="tab:orange")
+
+  plt.xlabel("comp time")
+  plt.ylabel("Cost")
+
+  plt.show()
+
+def make_dt_curve():
+  if True:
+    ks = [5, 7, 10, 12, 15, 20]
+
+    T_sim = 3
+
+    sys = Quadcopter2D()
+
+    Q = np.diag([1, 1, 1, 0.01, 0.01, 0.01])
+    ref = np.zeros((6, 1))
+    R = np.diag([.01, .01])
+
+    x = np.zeros(6)
+    x[0] = 3
+    x[1] = 0
+    x[2] = np.pi
+    x[5] = -10
+
+    u = np.zeros(2) - 0
+    dt = 0.05
+
+    state_scaling = 1 / np.array([1., 1, 1, 10, 10, 10])
+    input_scaling = 1 / np.array([2, 2])
+  elif True:
+    T_sim = 5
+    dt = 0.05
+
+    sys = JerkMasspointND(2)
+    x = np.zeros(6)
+    x[0] = 2
+    x[1] = 0
+    x[2] = 0
+    x[3] = 5
+
+    u = np.zeros(2)
+
+    Q = np.diag([10, 0.01, 0.01, 10, 0.01, 0.01])
+    ref = np.zeros((6, 1))
+    R = np.diag([.001, .001])
+
+    quadratic_cost = QuadraticCost(Q, R, Q)
+
+    state_scaling = 1 / (np.array([5, 1, 3, 5, 1, 3]))
+    input_scaling = 1 / (np.array([50, 50]))
+  elif False:
+    T_sim = 3
+
+    sys = MasspointND(2)
+    x = np.zeros(4)
+    x[2] = 5
+    u = np.zeros(2)
+
+    Q = np.diag([1, 0, 1, 0])
+    ref = np.zeros((4, 1))
+    R = np.diag([.1, .1])
+
+    dt = 0.1
+
+    state_scaling = 1 / np.array([1, 1, 1, 1])
+    input_scaling = 1 / np.array([5, 5])
+  else:
+    ks = [5, 7, 10, 12, 15, 20]
+
+    T_sim = 4
+    sys = Cartpole()
+    x = np.zeros(4)
+    x[2] = 0
+    u = np.zeros(1)
+    dt = 0.05
+
+    Q = np.diag([1, 0, 3, 0])
+    ref = np.zeros((4, 1))
+    ref[2, 0] = np.pi
+
+    R = np.diag([.1])
+
+    state_scaling = 1 / np.array([1, 1, 10, 10])
+    input_scaling = 1 / np.array([50])
+
+  quadratic_cost = QuadraticCost(Q, R, Q * 0.1)
+
+  for dt in [0.02, 0.05, 0.1, 0.2, 0.5]:
+    T = 1
+    k = int(T / dt)
+    nmpc = NMPC(sys, k, T / k, quadratic_cost, ref)
+    nmpc.state_scaling = state_scaling
+    nmpc.input_scaling = input_scaling
+
+    # dts = get_relu_spacing(dt, 30 * dt, 15)
+    # dts = get_linear_spacing(dt, T, k)
+    # nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+
+    # nu_mpc.nmpc.state_scaling = state_scaling
+    # nu_mpc.nmpc.input_scaling = input_scaling
+
+    mpc_sol = eval(sys, nmpc, x, T_sim, dt, int(dt/0.02 * 10))
+    # nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+
+    for j, res in enumerate([mpc_sol]):
+    # for j, res in enumerate([mpc_sol, nu_mpc_sol]):
+      times = res.times
+      states = res.states
+      inputs = res.inputs
+      computation_times = res.computation_time
+
+      plt.figure()
+      plt.plot(times, states)
+      plt.savefig(f"./img/states_{dt:.3f}.png", dpi=200)
+
+      plt.figure()
+      plt.plot(times[1:], inputs)
+      plt.savefig(f"./img/inputs_{dt:.3f}.png", dpi=200)
+
+      plt.figure('cost_dt_curve')
+      state_cost = 0
+      input_cost = 0
+      for i in range(len(states)-1):
+        diff = (states[i][:, None] - ref)
+        u = inputs[i][:, None]
+        state_cost += 0.02/10 * (diff.T @ Q @ diff)
+        input_cost += 0.02/10 * (u.T @ R @ u)
+
+      print(state_cost)
+      print(input_cost)
+      print(state_cost+input_cost)
+
+      print(sum(computation_times))
+
+      if j==0:
+        plt.scatter(dt, state_cost, marker='>', color="tab:blue")
+        plt.scatter(dt, input_cost, marker='<', color="tab:blue")
+        plt.scatter(dt, state_cost + input_cost, marker='o', color="tab:blue")
+      else:
+        plt.scatter(dt, state_cost, marker='>', color="tab:orange")
+        plt.scatter(dt, input_cost, marker='<', color="tab:orange")
+        plt.scatter(dt, state_cost + input_cost, marker='s', color="tab:orange")
+
+  plt.xlabel("dt")
+  plt.ylabel("Cost")
+  plt.savefig(f"./img/cost_dt_curve.png", dpi=300)
+
+
+  plt.show()
+
+
 def test_dt_max():
   dts = get_linear_spacing_with_max_dt(1, 0.01, 0.1, 20)
 
@@ -1742,7 +2019,9 @@ if __name__ == "__main__":
   # test_cstr()
   # test_batch_reactor()
 
+  # make_T_curve()
+  make_dt_curve()
   # make_cost_computation_curve()
 
   # cartpole_test()
-  double_cartpole_test()
+  # double_cartpole_test()
