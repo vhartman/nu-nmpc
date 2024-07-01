@@ -681,6 +681,17 @@ class NMPCC(Controller):
             constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
 
       cost = 0
+
+      # TODO: normalize cost by total prediction horizn?
+      Rs = 0.000001 * Winv @ np.eye(self.input_dim) @ Winv
+
+      curr_time = t
+      for i in range(self.N): 
+        dt = self.dts[i]
+        cost += dt * cp.quad_form(u[:,i][:, None], Rs)
+
+        curr_time += dt
+
       for i in range(1, self.N+1):
         dt = self.dts[i-1]
 
@@ -703,12 +714,12 @@ class NMPCC(Controller):
         hess  = 0.5 * hess + 0.5 * hess.T #+ np.eye(hess.shape[0]) * 0.001
         
         p_reshaped = cp.reshape(p[0, i], (1, 1))
-        x_reshaped = cp.reshape(Sinv @ x[:, i][:, None], (4, 1))
+        x_reshaped = cp.reshape(Sinv @ x[:, i][:, None], (self.state_dim, 1))
         tmp = cp.vstack([x_reshaped, p_reshaped])
 
         offset = np.vstack((prev_state[:, None], prev_progress[0]))
 
-        w = 2
+        w = 50
         cost += dt * w * 0.5 * cp.quad_form(tmp - offset, hess)
 
         # np.set_printoptions(precision=3)
@@ -724,14 +735,14 @@ class NMPCC(Controller):
         # cost += 0.5 * hess_theta * p[0, i]**2
         # cost += p[0, i] * hess_theta_q @ x[:, i] [:, None]
 
-        cost += dt * w * grad_q.T @ x[:, i][:, None]
+        cost += dt * w * grad_q.T @ Sinv @ x[:, i][:, None]
         cost += dt * w * grad_theta.flatten() * p[0, i]
 
-        cost -= dt * 0.01 * p[1, i]
+        cost -= dt * 0.1 * p[1, i]
 
       # cost = cost * 10
       # cost = cost / 1000
-      cost = cost * 10000
+      cost = cost * 10
       # cost = cost / 10
 
       # slack variables
