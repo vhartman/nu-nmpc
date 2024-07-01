@@ -1984,12 +1984,134 @@ def make_dt_curve():
 
   plt.show()
 
-
 def test_dt_max():
   dts = get_linear_spacing_with_max_dt(1, 0.01, 0.1, 20)
 
   plt.plot(dts)
   plt.show()
+
+def mpcc_debug():
+  T_sim = 3
+
+  sys = MasspointND(2)
+  u = np.zeros(2)
+
+  Q = np.diag([1, 0, 1, 0])
+  R = np.diag([.1, .1])
+
+  dt = 0.05
+
+  state_scaling = 1 / np.array([1, 1, 1, 1])
+  input_scaling = 1 / np.array([1, 1])
+
+  ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+
+  mapping = np.array([
+    [1, 0, 0, 0],
+    [0, 0, 1, 0],
+  ])
+
+  x = (mapping.T @ ref(0)).flatten()
+
+  nmpcc = NMPCC(sys, [dt]*20, mapping, ref)
+
+  u = nmpcc.compute(x, 0)
+
+  states = nmpcc.prev_x
+  input = nmpcc.prev_x
+
+  plt.figure("progress")
+  plt.plot(nmpcc.prev_p[0, :])
+  plt.plot(nmpcc.prev_p[1, :])
+
+  plt.figure()
+  plt.axis("equal")
+  x = states[0, :]
+  y = states[2, :]
+  plt.plot(x, y)
+
+  plt.figure()
+  plt.plot(input.T)
+
+  plt.show()
+
+  # t = np.linspace(0, 4, 1000)
+  # pts = a.path(t)
+  # x = [pts[i][0] for i in range(1000)]
+  # y = [pts[i][1] for i in range(1000)]
+  # print(pts)
+  # plt.plot(x, y)
+  # plt.show()
+
+def mpcc_test():
+  T_sim = 2
+
+  sys = MasspointND(2)
+  u = np.zeros(2)
+
+  Q = np.diag([1, 0, 1, 0])
+  R = np.diag([.1, .1])
+
+  dt = 0.025
+
+  state_scaling = 1 / np.array([1, 5, 1, 5])
+  input_scaling = 1 / np.array([5, 5])
+
+  ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+
+  mapping = np.array([
+    [1, 0, 0, 0],
+    [0, 0, 1, 0],
+  ])
+
+  x = (mapping.T @ ref(0)).flatten()
+
+  dts = [dt]*20
+  # dts = get_linear_spacing(dt, 20 * dt, 10)
+
+  nmpcc = NMPCC(sys, dts, mapping, ref)
+  nmpcc.state_scaling = state_scaling
+  nmpcc.input_scaling = input_scaling
+
+  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
+
+  for res in [nmpcc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+    
+    x = [states[i][0] for i in range(len(times))]
+    y = [states[i][2] for i in range(len(times))]
+
+    x_ref = [ref(times[i])[0] for i in range(len(times))]
+    y_ref = [ref(times[i])[1] for i in range(len(times))]
+
+    plt.figure()
+    plt.plot(x, y)
+    plt.plot(x_ref, y_ref, '--', color='tab:orange')
+    plt.axis('equal')
+    
+    plt.figure()
+    plt.plot(times, states, label=['x', 'v_x', 'y', 'v_y'])
+    plt.legend()
+
+    plt.figure()
+    plt.plot(times[1:], inputs)
+
+    plt.figure()
+    plt.plot(computation_times)
+
+    # cost = 0
+    # for i in range(len(states)-1):
+    #   diff = (states[i][:, None] - ref(times[i]))
+    #   u = inputs[i][:, None]
+    #   cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    # print(cost)
+
+  plt.show()
+
 
 if __name__ == "__main__":
   # test_dt_max()
@@ -2020,8 +2142,10 @@ if __name__ == "__main__":
   # test_batch_reactor()
 
   # make_T_curve()
-  make_dt_curve()
+  # make_dt_curve()
   # make_cost_computation_curve()
 
   # cartpole_test()
   # double_cartpole_test()
+
+  mpcc_test()

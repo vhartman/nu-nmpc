@@ -2,7 +2,9 @@ import numpy as np
 import jax
 
 import cvxpy as cp
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, make_interp_spline
+
+from systems import MasspointND
 
 class Controller:
   def __init__(self, system):
@@ -118,26 +120,6 @@ class NMPC(Controller):
 
     self.solve_time = 0
 
-    # scaling:
-    # xs = S @ x
-    # us = W @ u
-    # S @ xn = s @ (I + A) @ x + s @ B @ u + s @ K
-    # xns = S @ (I + A) @ Sinv @ S @ x + S @ B @ Winv @ W @ s + S @ K
-    # xns = S @ (I + A) @ Sinv @ xs + S @ B @ Winv @ us + S @ K
-    # l <= Cx <= u
-    # l*s <+ Cxs <= u*s
-    # x^T Q x + u^T R u
-    # Sinv @ S @ x)^T Q @ Sinv @ S @ x
-    # (Sinv @ xs)^T @ Q @ Sinv @ xs
-    # xs^T @ Sinv^T @ Q @ Sinv @ xs
-
-    # A' = S @ (I + A) @ Sinv
-    # B' = S @ B @ Winv
-    # K' = S @ K
-
-    # Q' = Sinv^T @ Q @ Sinv
-    # R' = Winv^T @ R # Winv
-
     # dynamics constraints
     for k in range(self.sqp_iters):
       constraints = []
@@ -209,7 +191,6 @@ class NMPC(Controller):
             constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
             constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
 
-
       # print("lims")
       # print(S @ self.sys.state_limits[:, 0][:, None])
       # print(S @ self.sys.state_limits[:, 1][:, None])
@@ -248,16 +229,18 @@ class NMPC(Controller):
 
       # cost = cost * 10
       # cost = cost / 1000
-      cost = cost * 100
+      # cost = cost * 100
+      # cost = cost / 10
 
       # slack variables
-      for i in range(self.N):
-        dt = self.dts[i]
-        cost += dt * 5 * cp.sum(s[:, (i+1)*2])
-        cost += dt * 5 * cp.sum(s[:, (i+1)*2+1])
+      if self.constraints_with_slack:
+        for i in range(self.N):
+          dt = self.dts[i]
+          cost += dt * 10 * cp.sum(s[:, (i+1)*2])
+          cost += dt * 10 * cp.sum(s[:, (i+1)*2+1])
 
-        cost += dt * 100 * cp.sum_squares(s[:, (i+1)*2])
-        cost += dt * 100 * cp.sum_squares(s[:, (i+1)*2+1])
+          cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2])
+          cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2+1])
 
       objective = cp.Minimize(cost)
 
@@ -313,11 +296,11 @@ class NMPC(Controller):
       # print(data['b'])
 
     if prob.status not in ["infeasible", "unbounded"]:
-        print("U")
-        print(u.value[:, 0])
-        print( Winv @ u.value[:, 0])
-        return Winv @ u.value[:, 0]
-        # return u.value[:, 0]
+      print("U")
+      print(u.value[:, 0])
+      print( Winv @ u.value[:, 0])
+      return Winv @ u.value[:, 0]
+      # return u.value[:, 0]
 
     return np.zeros(self.sys.input_dim)
   
@@ -361,24 +344,24 @@ def get_linear_spacing_v2(dt0, T, steps):
 def get_power_spacing(dt0, T, steps):
   def solve_for_alpha(T, dt, N, max_iterations=100, tolerance=1e-6):
     def f(alpha):
-        return dt * (((1 + alpha) ** (N + 1) - 1) / alpha) - T
+      return dt * (((1 + alpha) ** (N + 1) - 1) / alpha) - T
 
     def f_prime(alpha):
-        return dt * ((N + 1) * (1 + alpha)**N / alpha - ((1 + alpha)**(N + 1) - 1) / alpha**2)
+      return dt * ((N + 1) * (1 + alpha)**N / alpha - ((1 + alpha)**(N + 1) - 1) / alpha**2)
 
     # Initial guess
     alpha = 0.1
 
     for _ in range(max_iterations):
-        f_value = f(alpha)
-        if abs(f_value) < tolerance:
-            return alpha
+      f_value = f(alpha)
+      if abs(f_value) < tolerance:
+          return alpha
 
-        f_prime_value = f_prime(alpha)
-        if f_prime_value == 0:
-            return None  # To avoid division by zero
+      f_prime_value = f_prime(alpha)
+      if f_prime_value == 0:
+          return None  # To avoid division by zero
 
-        alpha = alpha - f_value / f_prime_value
+      alpha = alpha - f_value / f_prime_value
 
     return None  # If no solution found within max_iterations
   
@@ -397,17 +380,6 @@ class NU_NMPC(Controller):
     res = self.nmpc.compute(state, t)
     self.solve_time = self.nmpc.solve_time
     return res
-
-class NMPCC(Controller):
-  def __init__(self, system, dts, mapping, reference):
-    self.sys = system
-    self.dts = dts
-
-    def error(q, theta):
-      return jax.norm(reference(theta) - mapping(q))
-
-  def compute(self, state, t):
-    pass
 
 class MoveBlockingNMPC(Controller):
   def __init__(self, system, N, dt, quadratic_cost, reference, blocks):
@@ -428,3 +400,416 @@ def get_linear_blocking(steps, num_free_vars):
   blocks[-1] = blocks[-1] + (steps - sum_naive)
 
   return blocks
+
+class NMPCC(Controller):
+  def __init__(self, system, dts, H, reference):
+    self.prev_x = []
+    self.prev_u = []
+
+    self.N = len(dts)
+
+    self.sys = system
+    self.dts = dts
+
+    self.H = H
+
+    # make spline approximation of reference path
+    if callable(reference):
+      self.ref = reference
+    else:
+      self.ref = lambda t: reference
+
+    ts = np.linspace(0, 4, 100)
+    pts = [self.ref(t) for t in ts]
+    self.path = make_interp_spline(ts, pts)
+    self.path_derivative = self.path.derivative(1)
+    self.path_second_derivative = self.path.derivative(2)
+
+    self.progress_system = MasspointND(1)
+    self.progress_linearization = jax.jit(self.progress_system.linearization)
+
+    self.state_dim = self.sys.state_dim
+    self.input_dim = self.sys.input_dim
+
+    self.prev_x = []
+    self.prev_u = []
+
+    self.prev_p = []
+    self.prev_up = []
+
+    self.input_scaling = np.array([1] * self.sys.input_dim)
+    self.state_scaling = np.array([1] * self.sys.state_dim)
+
+    # solver params
+    self.sqp_iters = 3
+    self.sqp_mixing = 0.8
+
+    self.first_run = True
+
+    self.linearization = jax.jit(self.sys.linearization)
+
+    self.constraints_with_slack = True
+
+    self.move_blocking = False
+    self.blocks = None
+
+  def compute_initial_state_guess(self, x):
+    if self.first_run:
+      for i in range(self.N+1):
+        self.prev_x.append(x)
+
+      self.prev_x = np.array(self.prev_x).T
+    else:
+      # shift solution by one
+      # self.prev_x = np.hstack((self.prev_x[:, 1:], self.prev_x[:, -1][:, None]))
+      # self.prev_x[:, 0] = x
+
+      times = np.array([0] + list(np.cumsum(self.dts)))
+
+      f = interp1d(times, self.prev_x, axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
+      new_x = f(times + self.dts[0])
+      
+      self.prev_x = new_x
+      self.prev_x[:, 0] = x
+
+  def compute_initial_control_guess(self):
+    if self.first_run:
+      for _ in range(self.N):
+        self.prev_u.append(np.zeros(self.input_dim))
+
+      self.prev_u = np.array(self.prev_u).T
+    else:
+      # shift solution by one
+      # self.prev_u = np.hstack((self.prev_u[:, 1:], self.prev_u[:, -1][:, None]))
+
+      times = np.array([0] + list(np.cumsum(self.dts[:-1])))
+
+      f = interp1d(times, self.prev_u, axis=1, bounds_error=False, fill_value=self.prev_u[:, -1])
+      new_u = f(times + self.dts[0])
+
+      self.prev_u = new_u
+
+  def project_state_to_progess(self, state):
+    min_error = 1e6
+    theta_best = 0
+    for t in np.linspace(0, 4, 1000):
+      e = self.error(state, t)
+      if e < min_error:
+        min_error = e
+        theta_best = t
+
+    return theta_best
+
+  def compute_initial_progress_guess(self, state):
+    theta = self.project_state_to_progess(state)
+
+    if self.first_run:
+      for i in range(self.N+1):
+        self.prev_p.append(np.array([theta + i*0.01, 0.01]))
+
+      self.prev_p = np.array(self.prev_p).T
+    else:
+      times = np.array([0] + list(np.cumsum(self.dts)))
+
+      f = interp1d(times, self.prev_p, axis=1, bounds_error=False, fill_value=self.prev_p[:, -1])
+      new_p = f(times + self.dts[0])
+      
+      self.prev_p = new_p
+      self.prev_p[:, 0] = theta
+    
+  def compute_initial_progress_input_guess(self):
+    if self.first_run:
+      for i in range(self.N):
+        self.prev_up.append(np.ones(1)*0.1)
+
+      self.prev_up = np.array(self.prev_up).T
+    else:
+      times = np.array([0] + list(np.cumsum(self.dts[:-1])))
+
+      print(times)
+      print(len(times))
+      print(self.prev_up)
+      print(len(self.prev_up))
+      f = interp1d(times, self.prev_up, axis=1, bounds_error=False, fill_value=self.prev_up[:, -1])
+      new_up = f(times + self.dts[0])
+      
+      self.prev_up = new_up
+
+  def error(self, q, theta):
+    residual = self.path(theta) - self.H @ q[:, None]
+    return residual.T @ residual
+
+  def error_quad_approx(self, q, theta):
+    residual = self.path(theta) - self.H @ q[:, None]
+
+    # print('state', q)
+    # print('path', self.path(theta))
+    # print('theta', theta)
+    # print("residual:", residual)
+    
+    path_jac = self.path_derivative(theta)
+    path_hess = self.path_second_derivative(theta)
+
+    if True: #np.linalg.norm(path_hess) < 1e-3:
+      path_hess *= 0.
+
+    # print("path gradient", path_jac)
+    # print("path hessian", path_hess)
+
+    # Compute the gradient
+    grad_theta = 2 * (self.path_derivative(theta).T @ residual)
+    grad_q = -2 * (self.H.T @ residual)
+
+    # Compute the Hessian
+    hess_theta = 2 * (path_jac.T @ path_jac + path_hess.T @ residual)
+    # hess_theta = 2 * (path_jac.T @ path_jac)
+    hess_q = 2 * (self.H.T @ self.H)
+    hess_theta_q = -2 * (path_jac.T @ self.H)
+
+    print("other part", path_jac.T @ path_jac)
+    print("residual thingy:", path_hess.T @ residual)
+
+    return hess_q, hess_theta, hess_theta_q, grad_q, grad_theta
+
+  def compute(self, state, t):
+    x = cp.Variable((self.state_dim, self.N+1))
+    u = cp.Variable((self.input_dim, self.N))
+
+    s = cp.Variable((self.state_dim, (self.N+1)*2))
+
+    p = cp.Variable((2, self.N+1))
+    up = cp.Variable((1, self.N))
+
+    # project state to path to obtain progress var
+
+    S = np.diag(self.state_scaling)
+    Sinv = np.diag(1 / self.state_scaling)
+
+    W = np.diag(self.input_scaling)
+    Winv = np.diag(1 / self.input_scaling)
+
+    self.compute_initial_state_guess((S @ state[:, None]).flatten())
+    self.compute_initial_control_guess()
+
+    self.compute_initial_progress_guess(state)
+    self.compute_initial_progress_input_guess()
+
+    if not self.first_run:
+      print(self.prev_x[:, 0])
+
+    self.solve_time = 0
+
+    for k in range(self.sqp_iters):
+      constraints = []
+      # dynamics constraints
+      for i in range(self.N):
+        idx = i
+        next_idx = i+1
+
+        dt = self.dts[i]
+        print(i, dt, t)
+
+        # this should be shifted by one step
+        prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
+        prev_input = (Winv @ self.prev_u[:, i][:, None]).flatten()
+
+        A, B, K = self.linearization(prev_state, prev_input, dt)
+
+        constraints.append(
+          x[:, next_idx][:, None] == S @ (A) @ Sinv @ x[:, idx][:, None] + S @ B @ Winv @ u[:, idx][:, None] - S @ K
+        )
+
+      constraints.append(x[:, 0][:, None] == S @ state[:, None])
+
+      # add dynamics for progress
+      for i in range(self.N):
+        idx = i
+        next_idx = i+1
+
+        dt = self.dts[i]
+
+        prev_progress = self.prev_p[:, i]
+        prev_input = self.prev_up[:, i]
+
+        A, B, K = self.progress_linearization(prev_progress, prev_input, dt)
+
+        constraints.append(
+          p[:, next_idx][:, None] == A @ p[:, idx][:, None] + B @ up[:, idx][:, None] - K
+        )
+
+      # input constraints
+      for i in range(self.N):
+        constraints.append(u[:, i][:, None] >= W @ self.sys.input_limits[:, 0][:, None])
+        constraints.append(u[:, i][:, None] <= W @ self.sys.input_limits[:, 1][:, None])
+
+      # progress constraints
+      for i in range(self.N):
+        constraints.append(up[0, i] >= -10)
+        constraints.append(up[0, i] <= 10)
+    
+      for i in range(self.N+1):
+        constraints.append(p[1, i] >= 0)
+        constraints.append(p[1, i] <= 2)
+
+        constraints.append(p[0, i] >= 0)
+        constraints.append(p[0, i] <= 3)
+
+      if self.move_blocking:
+        idx = 0
+        for block_len in self.blocks:
+          if block_len > 1:
+            for i in range(1, block_len):
+              constraints.append(u[:, idx] == u[:, idx + i])
+              print(idx, idx + i)
+          
+          idx += block_len
+
+      # state constraints
+      if self.constraints_with_slack:
+        if not self.first_run:
+          for i in range(self.N + 1):
+            constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i*2][:, None])
+            constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i*2+1][:, None])
+
+        # slack variables
+        for i in range((self.N + 1)*2):
+          constraints.append(s[:, i] >= 0)
+      else:
+        if not self.first_run:
+          for i in range(self.N + 1):
+            constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
+            constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
+
+      cost = 0
+      for i in range(1, self.N+1):
+        dt = self.dts[i-1]
+
+        # quadratize error
+        prev_progress = self.prev_p[:, i]
+        prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
+
+        print("Step", i)
+        hess_q, hess_theta, hess_theta_q, grad_q, grad_theta = self.error_quad_approx(prev_state, prev_progress[0])
+
+        # print(hess_q)
+        # print(hess_theta)
+        # print(hess_theta_q)
+        # print(grad_q)
+        # print(grad_theta)
+
+        hess = np.block([[hess_q, hess_theta_q.T],
+                         [hess_theta_q, hess_theta]])
+        
+        hess  = 0.5 * hess + 0.5 * hess.T #+ np.eye(hess.shape[0]) * 0.001
+        
+        p_reshaped = cp.reshape(p[0, i], (1, 1))
+        x_reshaped = cp.reshape(Sinv @ x[:, i][:, None], (4, 1))
+        tmp = cp.vstack([x_reshaped, p_reshaped])
+
+        offset = np.vstack((prev_state[:, None], prev_progress[0]))
+
+        w = 2
+        cost += dt * w * 0.5 * cp.quad_form(tmp - offset, hess)
+
+        # np.set_printoptions(precision=3)
+        # print(hess)
+
+        # def is_pos_def(x):
+        #   print("EV:", np.linalg.eigvals(x))
+        #   return np.all(np.linalg.eigvals(x) > 0)
+        
+        # print(is_pos_def(hess))
+
+        # cost += 0.5 * cp.quad_form(x[:, i] [:, None], hess_q)
+        # cost += 0.5 * hess_theta * p[0, i]**2
+        # cost += p[0, i] * hess_theta_q @ x[:, i] [:, None]
+
+        cost += dt * w * grad_q.T @ x[:, i][:, None]
+        cost += dt * w * grad_theta.flatten() * p[0, i]
+
+        cost -= dt * 0.01 * p[1, i]
+
+      # cost = cost * 10
+      # cost = cost / 1000
+      cost = cost * 10000
+      # cost = cost / 10
+
+      # slack variables
+      if self.constraints_with_slack:
+        for i in range(self.N):
+          dt = self.dts[i]
+          cost += dt * 10 * cp.sum(s[:, (i+1)*2])
+          cost += dt * 10 * cp.sum(s[:, (i+1)*2+1])
+
+          cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2])
+          cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2+1])
+
+      objective = cp.Minimize(cost)
+
+      prob = cp.Problem(objective, constraints)
+
+      # warm start
+      x.value = self.prev_x
+      u.value = self.prev_u
+
+      # The optimal objective value is returned by `prob.solve()`.
+      # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-8, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-4, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
+      # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
+      result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
+      # result = prob.solve(solver='PIQP', verbose=True)
+
+      # options_cvxopt = {
+      #     "max_iters": 5000,
+      #     "verbose": True,
+      #     "abstol": 1e-21,
+      #     "reltol": 1e-11,
+      #     "refinement": 2, # higher number seemed to make things worse
+      #     "kktsolver": "robust"
+      # }
+      # result = prob.solve(solver='CVXOPT', **options_cvxopt)
+
+      print("Sols")
+      print(x.value)
+      print(u.value)
+
+      # update solutions for linearization
+      # TODO: should really be a line search
+      if self.first_run:
+        self.prev_x = x.value
+        self.prev_u = u.value
+
+        self.prev_p = p.value
+        self.prev_up = up.value
+      else:
+        self.prev_x = x.value * self.sqp_mixing + self.prev_x * (1 - self.sqp_mixing)
+        self.prev_u = u.value * self.sqp_mixing + self.prev_u * (1 - self.sqp_mixing)
+
+        self.prev_p = p.value * self.sqp_mixing + self.prev_p * (1 - self.sqp_mixing)
+        self.prev_up = up.value * self.sqp_mixing + self.prev_up * (1 - self.sqp_mixing)
+
+      self.first_run = False
+
+      self.solve_time += prob.solver_stats.solve_time
+
+      # data, _, _= prob.get_problem_data(cp.OSQP)
+
+      # print(data)
+
+      # print("A")
+      # print(data['A'].todense())
+      # np.savetxt("foo.csv", data["A"].todense(), delimiter=",")
+
+      # print("B")
+      # print(data['b'])
+
+    if prob.status not in ["infeasible", "unbounded"]:
+      print("U")
+      print(u.value[:, 0])
+      print( Winv @ u.value[:, 0])
+      return Winv @ u.value[:, 0]
+      # return u.value[:, 0]
+
+    return np.zeros(self.sys.input_dim)
+  

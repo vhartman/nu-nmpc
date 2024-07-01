@@ -83,6 +83,29 @@ class System:
 
     return A_disc, B_disc, K
 
+class MasspointND(System):
+  def __init__(self, N):
+    self.N = N
+
+    self.state_dim = 2*N
+    self.input_dim = N
+
+    self.state_limits = np.array([[-10, 10], [-5, 5]]*N)
+    self.input_limits = np.array([[-5, 5]]*N)
+
+    super().__init__()
+
+  def f(self, state, u):
+    A_cont = np.zeros((self.state_dim, self.state_dim))
+    for i in range(self.input_dim):
+      A_cont[i*2, i*2+1] = 1
+
+    B_cont = np.zeros((self.state_dim, self.input_dim))
+    for i in range(self.input_dim):
+      B_cont[i*2+1, i] = 1
+
+    return jnp.asarray(A_cont @ state + B_cont @ u)
+
 class Masspoint2D(System):
   def __init__(self):
     self.state_dim = 4
@@ -95,7 +118,31 @@ class Masspoint2D(System):
 
   def f(self, state, u):
     return jnp.asarray([state[1], u[0], state[3], u[1]])
-  
+
+class JerkMasspointND(System):
+  def __init__(self, N):
+    self.N = N
+
+    self.state_dim = 3*N
+    self.input_dim = N
+
+    self.state_limits = np.array([[-10, 10], [-1, 1], [-3, 3]]*N)
+    self.input_limits = np.array([[-50, 50]]*N)
+
+    super().__init__()
+
+  def f(self, state, u):
+    A_cont = np.zeros((self.state_dim, self.state_dim))
+    for i in range(self.input_dim):
+      A_cont[i*3, i*3+1] = 1
+      A_cont[i*3+1, i*3+2] = 1
+
+    B_cont = np.zeros((self.state_dim, self.input_dim))
+    for i in range(self.input_dim):
+      B_cont[i*3+2, i] = 1
+
+    return jnp.asarray(A_cont @ state + B_cont @ u)
+
 class JerkMasspoint2D(System):
   def __init__(self):
     self.state_dim = 6
@@ -475,3 +522,32 @@ class Unicycle(System):
 
     return jnp.asarray([x_dot, y_dot, theta_dot])
   
+class Unicycle2ndOrder(System):
+  def __init__(self):
+    self.state_dim = 5
+    self.input_dim = 2
+
+    # x, y, theta, v, omega
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [-20, 20], [-10, 10]])
+    self.input_limits = np.array([[-0.1, 5], [-3, 3]])
+
+    super().__init__()
+
+  def f(self, state, u):
+    x, y, theta, v, omega = state
+    us, uw = u
+
+    x_dot = v * jnp.cos(theta)
+    y_dot = v * jnp.sin(theta)
+    theta_dot = omega
+
+    v_dot = us
+    omega_dot = uw
+
+    return jnp.asarray([x_dot, y_dot, theta_dot, v_dot, omega_dot])
+  
+class Acrobot(System):
+  pass
+
+class CarWithTrailer(System):
+  pass
