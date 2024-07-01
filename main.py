@@ -2112,6 +2112,92 @@ def mpcc_test():
 
   plt.show()
 
+def mpcc_racecar_test():
+  T_sim = 4
+  dt = 0.05
+
+  sys = Racecar()
+  x = np.zeros(6)
+
+  # ref = lambda t: np.array([figure_eight(t)[0], figure_eight(t)[1]]).reshape(-1, 1)
+  ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+
+  state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5]))
+  input_scaling = 1 / (np.array([0.1, 0.35]))
+  mapping = np.array([
+    [1, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0],
+  ])
+
+  x = (mapping.T @ ref(0)).flatten()
+  x[2] = np.pi/2
+  x[3] = 0.4
+
+  # dts = [dt]*10
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+
+  nmpcc = NMPCC(sys, dts, mapping, ref)
+  nmpcc.state_scaling = state_scaling
+  nmpcc.input_scaling = input_scaling
+
+  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
+
+  for res in [nmpcc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+    
+    x = [states[i][0] for i in range(len(times))]
+    y = [states[i][1] for i in range(len(times))]
+
+    x_ref = [ref(times[i])[0] for i in range(len(times))]
+    y_ref = [ref(times[i])[1] for i in range(len(times))]
+
+    plt.figure()
+    plt.plot(x, y)
+    plt.plot(x_ref, y_ref, '--', color='tab:orange')
+    plt.axis('equal')
+
+    ax = plt.gca()
+
+    triangle = np.array([[0.5, 0], [-0.5, 0], [0, 1]]) * 0.05
+
+    for s in states[::20]:
+      # Create a polygon patch
+      polygon = patches.Polygon(triangle, closed=True, edgecolor='black', fill=True)
+
+      # Add the polygon to the current axis
+      ax.add_patch(polygon)
+
+      # Create a transformation for rotating the polygon
+      angle = (s[2] - np.pi/2) / np.pi * 180  # angle in degrees
+      origin = (0.0, 0.0)  # rotation origin
+      t = (transforms.Affine2D()
+          .rotate_deg_around(origin[0], origin[1], angle)
+          .translate(s[0], s[1]))
+      # Apply the transformation to the polygon
+      polygon.set_transform(t + ax.transData)
+    
+    # plt.figure()
+    # plt.plot(times, states, label=['x', 'v_x', 'y', 'v_y'])
+    # plt.legend()
+
+    plt.figure()
+    plt.plot(times[1:], inputs)
+
+    plt.figure()
+    plt.plot(computation_times)
+
+    # cost = 0
+    # for i in range(len(states)-1):
+    #   diff = (states[i][:, None] - ref(times[i]))
+    #   u = inputs[i][:, None]
+    #   cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    # print(cost)
+
+  plt.show()
 
 if __name__ == "__main__":
   # test_dt_max()
@@ -2148,4 +2234,5 @@ if __name__ == "__main__":
   # cartpole_test()
   # double_cartpole_test()
 
-  mpcc_test()
+  # mpcc_test()
+  mpcc_racecar_test()
