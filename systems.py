@@ -547,7 +547,67 @@ class Unicycle2ndOrder(System):
     return jnp.asarray([x_dot, y_dot, theta_dot, v_dot, omega_dot])
   
 class Acrobot(System):
-  pass
+  def __init__(self):
+    self.state_dim = 4
+    self.input_dim = 1
+
+    # x, y, theta, v, omega
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [-20, 20]])
+    self.input_limits = np.array([[5, 5]])
+
+    super().__init__()
+
+  # http://incompleteideas.net/book/ebook/node110.html
+  def f(self, state, u):
+    theta_1, theta_2, theta_1_dot, theta_2_dot = state
+    tau = u[0]
+
+    m_1 = m_2 = 1.
+    l_1 = l_2 = 1.
+    l_c1 = l_c2 = 0.5
+    I_1 = I_2 = 1.
+
+    g=9.81
+    
+    d_1 = m_1 * l_c1**2 + m_2 * (l_1**2 + l_c2**2 + 2 * l_1*l_c2*jnp.cos(theta_2)) + I_1 + I_2
+    d_2 = m_2 * (l_c2**2 + l_1*l_c2 * jnp.cos(theta_2)) + I_2
+
+    phi_2 = m_2 * l_c2 * g * jnp.cos(theta_1 + theta_2 - np.pi/2)
+    phi_1 = -m_2*l_1*l_c2*theta_2_dot**2*jnp.sin(theta_2) - 2*m_2*l_1*l_c2*theta_2_dot*theta_1_dot*jnp.sin(theta_2) + (m_1*l_c1 + m_2*l_1)*g*jnp.cos(theta_1 - np.pi/2) + phi_2
+
+    theta_2_ddot = (tau + d_2/d_1 * phi_1 - m_2*l_1*l_c2*theta_1_dot**2*jnp.sin(theta_2) - phi_2) / (m_2*l_c2**2 + I_2 - d_2**2/d_1)
+    theta_1_ddot = -1/d_1 * (d_2*theta_2_ddot + phi_1)
+
+    return jnp.asarray([theta_1_dot, theta_2_dot, theta_1_ddot, theta_2_ddot])
+
 
 class CarWithTrailer(System):
+  def __init__(self):
+    # x, y, theta, beta
+    self.state_dim = 4
+    # v, alpha
+    self.input_dim = 2
+
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [-20, 20]])
+    self.input_limits = np.array([[-0.1, 5], [-3, 3]])
+
+    super().__init__()
+
+  # https://ch.mathworks.com/help/mpc/ug/truck-and-trailer-automatic-parking-using-multistage-mpc.html
+  def f(self, state, u):
+    _, _, theta, beta = state
+    v, alpha = u
+
+    M_1 = 1
+    L_1 = 6
+    L_2 = 10
+
+    x_dot = v * jnp.cos(beta) * (1 + M_1/L_1 * jnp.tan(beta) * jnp.tan(alpha))*jnp.cos(theta)
+    y_dot = v * jnp.cos(beta) * (1 + M_1/L_1 * jnp.tan(beta) * jnp.tan(alpha))*jnp.sin(theta)
+    theta_dot = v * (jnp.sin(beta) / L_2 - M_1 / (L_1 * L_2) * jnp.cos(beta)*jnp.tan(alpha))
+    beta_dot = v * (jnp.tan(alpha)/L_1 - jnp.sin(beta)/L_2 + M_1/(L_1*L_2)*jnp.cos(beta) * jnp.tan(alpha))
+
+    return jnp.asarray([x_dot, y_dot, theta_dot, beta_dot])
+
+class RobotArmPole(System):
   pass
