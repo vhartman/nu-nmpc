@@ -90,8 +90,8 @@ class MasspointND(System):
     self.state_dim = 2*N
     self.input_dim = N
 
-    self.state_limits = np.array([[-10, 10], [-5, 5]]*N)
-    self.input_limits = np.array([[-5, 5]]*N)
+    self.state_limits = np.array([[-10, 10], [-2, 2]]*N)
+    self.input_limits = np.array([[-10, 10]]*N)
 
     super().__init__()
 
@@ -127,7 +127,7 @@ class JerkMasspointND(System):
     self.input_dim = N
 
     self.state_limits = np.array([[-10, 10], [-1, 1], [-3, 3]]*N)
-    self.input_limits = np.array([[-50, 50]]*N)
+    self.input_limits = np.array([[-10, 10]]*N)
 
     super().__init__()
 
@@ -435,7 +435,7 @@ class BatchBioreactor(System):
 
     return jnp.asarray([X_s_dot, S_s_dot, P_s_dot, V_s_dot])
 
-# bicycle model from hliniger, ttps://arxiv.org/pdf/1711.07300
+# bicycle model from liniger, ttps://arxiv.org/pdf/1711.07300
 class Racecar(System):
   def __init__(self):
     self.state_dim = 6
@@ -497,7 +497,9 @@ class Racecar(System):
     # print(omega_dot)
 
     return jnp.asarray([x_dot, y_dot, phi_dot, v_x_dot, v_y_dot, omega_dot])
-  
+
+class AMZRacecar(System):
+  pass
 
 class Unicycle(System):
   def __init__(self):
@@ -608,6 +610,9 @@ class CarWithTrailer(System):
     beta_dot = v * (jnp.tan(alpha)/L_1 - jnp.sin(beta)/L_2 + M_1/(L_1*L_2)*jnp.cos(beta) * jnp.tan(alpha))
 
     return jnp.asarray([x_dot, y_dot, theta_dot, beta_dot])
+
+class PlanarQuadrotorPole(System):
+  pass
 
 class RobotArmPole(System):
   pass

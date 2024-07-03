@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import jax
 
 import cvxpy as cp
@@ -304,34 +305,51 @@ class NMPC(Controller):
 
     return np.zeros(self.sys.input_dim)
   
-#def get_relu_spacing(dt0, dt_max, T, steps):
+def get_linear_spacing_with_max_dt(T, dt0, dt_max, steps):
+  # copy and paste from claude
+  def calculate_T(alpha, dt_max, dt, N):
+    if alpha == 0:
+      return N * min(dt_max, dt)
+    
+    ts = [np.min([dt + alpha * i, dt_max]) for i in range(N)]
+    return sum(ts)
+    # k = (dt_max - dt) / alpha
+    # k_floor = math.floor(k)
+    
+    # if k <= 0:
+    #   return N * dt
+    # elif k >= N:
+    #   return sum(dt + alpha * i for i in range(N))
+    # else:
+    #   sum_before_k = sum(dt + alpha * i for i in range(k_floor))
+    #   partial_k = k - k_floor
+    #   sum_at_k = partial_k * dt_max + (1 - partial_k) * (dt + alpha * k_floor)
+    #   sum_after_k = (N - k_floor - 1) * dt_max
+    #   return sum_before_k + sum_at_k + sum_after_k
 
-# def get_linear_spacing_with_max_dt(T, dt0, dt_max, steps):
-#   def find_k_and_alpha(T, dt_0, dt_max, n, initial_alpha_guess=1.0, tolerance=1e-6, max_iterations=1000):
-#     def calculate_k(alpha):
-#       return int(dt_max // alpha)
+  def solve_for_alpha(target_T, dt0, dt_max, N, tolerance=1e-6, max_iterations=1000):
+    alpha_min = 0
+    alpha_max = (dt_max - dt0) * 2 / N  # An initial guess for upper bound
+    print(alpha_max)
 
-#     def calculate_alpha(k):
-#       return (2 * (T - n * dt_0 - (n - k - 1) * dt_max)) / (k * (k + 1))
-
-#     alpha = initial_alpha_guess
-#     for iteration in range(max_iterations):
-#       k = calculate_k(alpha)
-#       new_alpha = calculate_alpha(k)
+    for _ in range(max_iterations):
+      alpha = (alpha_min + alpha_max) / 2
+      calculated_T = calculate_T(alpha, dt_max, dt0, N)
       
-#       print(k , alpha, new_alpha)
+      if abs(calculated_T - target_T) < tolerance:
+        return alpha
+      
+      if calculated_T < target_T:
+        alpha_min = alpha
+      else:
+        alpha_max = alpha
+    
+    return alpha  # Return best approximation
 
-#       if abs(new_alpha - alpha) < tolerance:
-#         return k, new_alpha
+  alpha = solve_for_alpha(T, dt0, dt_max, steps)
+  print(alpha)
 
-#       alpha = new_alpha
-
-#     raise ValueError("Convergence not achieved within the maximum number of iterations")
-  
-#   assert(dt_max >= dt0)
-
-#   _, alpha = find_k_and_alpha(T, dt0, (dt_max - dt0), steps, 0.01)
-#   return [min(dt0 + i * alpha, dt_max) for i in range(steps)]
+  return [min(dt0 + i * alpha, dt_max) for i in range(steps)]
 
 def get_linear_spacing(dt0, T, steps):
   alpha = 2 *(T - steps * dt0) / (steps * (steps-1))
@@ -419,7 +437,7 @@ class NMPCC(Controller):
     else:
       self.ref = lambda t: reference
 
-    ts = np.linspace(0, 12, 300)
+    ts = np.linspace(0, 20, 300)
     pts = [self.ref(t) for t in ts]
     self.path = make_interp_spline(ts, pts)
     self.path_derivative = self.path.derivative(1)
@@ -440,7 +458,7 @@ class NMPCC(Controller):
     self.input_scaling = np.array([1] * self.sys.input_dim)
     self.state_scaling = np.array([1] * self.sys.state_dim)
 
-    self.progress_bounds = np.array([[0, 12], [0, 5]])
+    self.progress_bounds = np.array([[0, 20], [0, 5]])
     self.progress_input_bounds = np.array([[-5, 5]])
 
     self.contouring_weight = 0.5
@@ -511,7 +529,7 @@ class NMPCC(Controller):
 
     min_error = 1e6
     theta_best = 0
-    for t in np.linspace(0, 4, 1000):
+    for t in np.linspace(0, 20, 1000):
       e = self.error(state, t)
       if abs(t - prev_theta) < 0.2 and e < min_error:
       # if e < min_error:
@@ -613,8 +631,8 @@ class NMPCC(Controller):
 
     mat = np.eye(len(tangent)) - tangent @ tangent.T
 
-    print('other proj mat')
-    print(mat)
+    # print('other proj mat')
+    # print(mat)
     
     return self.error_quad_approx(q, theta, mat)
 
@@ -707,12 +725,12 @@ class NMPCC(Controller):
 
       # progress constraints
       for i in range(self.N):
-        constraints.append(up[:, i] >= self.progress_input_bounds[:, 0])
-        constraints.append(up[:, i] <= self.progress_input_bounds[:, 1])
+        constraints.append(up[:, i][:, None] >= self.progress_input_bounds[:, 0][:, None])
+        constraints.append(up[:, i][:, None] <= self.progress_input_bounds[:, 1][:, None])
     
       for i in range(self.N+1):
-        constraints.append(p[:, i] >= self.progress_bounds[:, 0])
-        constraints.append(p[:, i] <= self.progress_bounds[:, 1])
+        constraints.append(p[:, i][:, None] >= self.progress_bounds[:, 0][:, None])
+        # constraints.append(p[:, i][:, None] <= self.progress_bounds[:, 1][:, None])
 
       if self.move_blocking:
         idx = 0

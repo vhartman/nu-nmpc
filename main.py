@@ -300,9 +300,8 @@ def squircle(t):
   y = abs(np.sin(w)) ** (2/8) * np.sign(np.sin(w))
   return np.array([x, 0, y, 0]).reshape((-1, 1))
 
-def square(t):
+def square(t, side_length=1):
   t = (float(t)) % 4
-  side_length = 1  # Total side length of the square
   half_side = side_length / 2
   x = np.piecewise(t,
                 [t < 1, (t >= 1) & (t < 2), (t >= 2) & (t < 3), t >= 3],
@@ -322,6 +321,18 @@ def square(t):
 def figure_eight(t, r=1):
   x = np.sin(t) * r
   y = np.sin(t) * np.cos(t) * r
+  return np.array([x, y])
+
+track_center = np.loadtxt('./track/center.txt')
+track_inner = np.loadtxt('./track/inner.txt')
+track_outer = np.loadtxt('./track/outer.txt')
+def racetrack(t, track=track_center):
+  num_pts = len(track[0])
+  idx = int(num_pts * t / 4.) % num_pts
+
+  x = track[0][idx]
+  y = track[1][idx]
+
   return np.array([x, y])
 
 def test_masspoint_ref_path():
@@ -2044,20 +2055,21 @@ def mpcc_debug():
   # plt.show()
 
 def mpcc_test():
-  T_sim = 2
+  T_sim = 17
 
   sys = MasspointND(2)
-  u = np.zeros(2)
 
-  Q = np.diag([1, 0, 1, 0])
-  R = np.diag([.1, .1])
-
-  dt = 0.025
+  dt = 0.1
+  # dt = 0.05
 
   state_scaling = 1 / np.array([1, 5, 1, 5])
   input_scaling = 1 / np.array([5, 5])
 
-  ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+  # state_scaling = 1 / np.array([1, 1, 1, 1])
+  # input_scaling = 1 / np.array([1, 1])
+
+  ref = lambda t: np.array([square(t,3)[0], square(t,3)[1]]).reshape(-1, 1)
+  # ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
 
   mapping = np.array([
     [1, 0, 0, 0],
@@ -2066,8 +2078,11 @@ def mpcc_test():
 
   x = (mapping.T @ ref(0)).flatten()
 
-  dts = [dt]*20
+  # dts = [dt]*10
+  # dts = [dt]*20
   # dts = get_linear_spacing(dt, 20 * dt, 10)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_power_spacing(dt, 10 * dt, 5)
 
   nmpcc = NMPCC(sys, dts, mapping, ref)
   nmpcc.state_scaling = state_scaling
@@ -2091,7 +2106,13 @@ def mpcc_test():
     plt.plot(x, y)
     plt.plot(x_ref, y_ref, '--', color='tab:orange')
     plt.axis('equal')
-    
+
+    for s in states[::20]:
+      x = s[0]
+      y = s[2]
+
+      plt.scatter(x, y, color='tab:blue')
+
     plt.figure()
     plt.plot(times, states, label=['x', 'v_x', 'y', 'v_y'])
     plt.legend()
@@ -2112,15 +2133,84 @@ def mpcc_test():
 
   plt.show()
 
-def mpcc_racecar_test():
+def mpcc_jerk_test():
   T_sim = 4
+
+  sys = JerkMasspointND(2)
+
+  dt = 0.05
+
+  state_scaling = 1 / (np.array([5, 1, 3, 5, 1, 3]))
+  input_scaling = 1 / (np.array([50, 50]))
+  # state_scaling = 1 / (np.array([1, 1, 1, 1, 1, 1]))
+  # input_scaling = 1 / (np.array([50, 50]))
+
+  ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+  # ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
+
+  mapping = np.array([
+    [1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0],
+  ])
+
+  x = (mapping.T @ ref(0)).flatten()
+
+  # dts = [dt]*30
+  dts = get_linear_spacing(dt, 30 * dt, 15)
+
+  nmpcc = NMPCC(sys, dts, mapping, ref)
+  nmpcc.state_scaling = state_scaling
+  nmpcc.input_scaling = input_scaling
+
+  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
+
+  for res in [nmpcc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+    
+    x = [states[i][0] for i in range(len(times))]
+    y = [states[i][3] for i in range(len(times))]
+
+    x_ref = [ref(times[i])[0] for i in range(len(times))]
+    y_ref = [ref(times[i])[1] for i in range(len(times))]
+
+    plt.figure()
+    plt.plot(x, y)
+    plt.plot(x_ref, y_ref, '--', color='tab:orange')
+    plt.axis('equal')
+    
+    plt.figure()
+    plt.plot(times, states)
+    plt.legend()
+
+    plt.figure()
+    plt.plot(times[1:], inputs)
+
+    plt.figure()
+    plt.plot(computation_times)
+
+    # cost = 0
+    # for i in range(len(states)-1):
+    #   diff = (states[i][:, None] - ref(times[i]))
+    #   u = inputs[i][:, None]
+    #   cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    # print(cost)
+
+  plt.show()
+
+def mpcc_racecar_test():
+  T_sim = 7
   dt = 0.05
 
   sys = Racecar()
   x = np.zeros(6)
 
   # ref = lambda t: np.array([figure_eight(t)[0], figure_eight(t)[1]]).reshape(-1, 1)
-  ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+  # ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+  ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
 
   state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5]))
   input_scaling = 1 / (np.array([0.1, 0.35]))
@@ -2130,15 +2220,23 @@ def mpcc_racecar_test():
   ])
 
   x = (mapping.T @ ref(0)).flatten()
-  x[2] = np.pi/2
+  # x[2] = np.pi/2
+  # x[3] = 0.4
+  x[2] = -np.pi/4
   x[3] = 0.4
 
+  # dts = [dt]*20
   # dts = [dt]*10
-  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_linear_spacing(dt, 20 * dt, 10)
+  dts = get_power_spacing(dt, 20 * dt, 10)
 
   nmpcc = NMPCC(sys, dts, mapping, ref)
   nmpcc.state_scaling = state_scaling
   nmpcc.input_scaling = input_scaling
+
+  nmpcc.contouring_weight = .25
+  nmpcc.cont_weight = .5
+  nmpcc.progress_weight = 2
 
   nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
 
@@ -2154,9 +2252,18 @@ def mpcc_racecar_test():
     x_ref = [ref(times[i])[0] for i in range(len(times))]
     y_ref = [ref(times[i])[1] for i in range(len(times))]
 
+    x_inner = [racetrack(times[i], track_inner)[0] for i in range(len(times))]
+    y_inner = [racetrack(times[i], track_inner)[1] for i in range(len(times))]
+    
+    x_outer = [racetrack(times[i], track_outer)[0] for i in range(len(times))]
+    y_outer = [racetrack(times[i], track_outer)[1] for i in range(len(times))]
+
     plt.figure()
     plt.plot(x, y)
     plt.plot(x_ref, y_ref, '--', color='tab:orange')
+    
+    plt.plot(x_inner, y_inner, '--', color='black')
+    plt.plot(x_outer, y_outer, '--', color='black')
     plt.axis('equal')
 
     ax = plt.gca()
@@ -2179,9 +2286,9 @@ def mpcc_racecar_test():
       # Apply the transformation to the polygon
       polygon.set_transform(t + ax.transData)
     
-    # plt.figure()
-    # plt.plot(times, states, label=['x', 'v_x', 'y', 'v_y'])
-    # plt.legend()
+    plt.figure()
+    plt.plot(times, states)
+    plt.legend()
 
     plt.figure()
     plt.plot(times[1:], inputs)
@@ -2196,6 +2303,25 @@ def mpcc_racecar_test():
     #   cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
 
     # print(cost)
+
+  plt.show()
+
+def dts_test():
+  dt = 0.05
+  T = 30 * dt
+  N = 10
+
+  dts_linear = get_linear_spacing(dt, T, N)
+  dts_power = get_power_spacing(dt, T, N)
+  dts_with_max_dt = get_linear_spacing_with_max_dt(T, dt, 0.2, N)
+
+  print('linear', sum(dts_linear))
+  print('power', sum(dts_power))
+  print('linear w/ max', sum(dts_with_max_dt))
+
+  plt.plot(dts_with_max_dt)
+  plt.plot(dts_linear)
+  plt.plot(dts_power)
 
   plt.show()
 
@@ -2234,5 +2360,16 @@ if __name__ == "__main__":
   # cartpole_test()
   # double_cartpole_test()
 
-  # mpcc_test()
-  mpcc_racecar_test()
+  mpcc_test()
+  # mpcc_jerk_test()
+  # mpcc_racecar_test()
+
+  # ts = np.linspace(0, 4, 100)
+  # x = [racetrack(t)[0] for t in ts]
+  # y = [racetrack(t)[1] for t in ts]
+
+  # plt.plot(x, y, 'o-')
+  # plt.axis('equal')
+  # plt.show()
+
+  # dts_test()
