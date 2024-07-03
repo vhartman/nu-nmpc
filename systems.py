@@ -13,6 +13,9 @@ class System:
     self.tmp = jax.jit(jax.jacfwd(self.step_rk4, argnums=0))
     self.tmp_inp = jax.jit(jax.jacfwd(self.step_rk4, argnums=1))
 
+    self.state_names = []
+    self.input_names = []
+
   def f(self, state, u):
     raise NotImplementedError("Implement me pls")
 
@@ -95,6 +98,9 @@ class MasspointND(System):
 
     super().__init__()
 
+    self.state_names = ['p', 'v'] * N
+    self.input_names = ['a'] * N
+
   def f(self, state, u):
     A_cont = np.zeros((self.state_dim, self.state_dim))
     for i in range(self.input_dim):
@@ -116,6 +122,9 @@ class Masspoint2D(System):
 
     super().__init__()
 
+    self.state_names = ['x', 'v_x', 'y', 'v_y']
+    self.input_names = ['a_x', 'a_y']
+
   def f(self, state, u):
     return jnp.asarray([state[1], u[0], state[3], u[1]])
 
@@ -130,6 +139,9 @@ class JerkMasspointND(System):
     self.input_limits = np.array([[-10, 10]]*N)
 
     super().__init__()
+
+    self.state_names = ['p', 'v', 'a'] * N
+    self.input_names = ['j'] * N
 
   def f(self, state, u):
     A_cont = np.zeros((self.state_dim, self.state_dim))
@@ -159,6 +171,9 @@ class JerkMasspoint2D(System):
 
     super().__init__()
 
+    self.state_names = ['x', 'v_x', 'a_x', 'y', 'v_y', 'a_y']
+    self.input_names = ['j_x', 'j_y']
+
   def f(self, state, u):
     return jnp.asarray([state[1], state[2], u[0], state[4], state[5], u[1]])
 
@@ -171,6 +186,9 @@ class LaplacianDynamics(System):
     self.input_limits = np.array([[-5, 0], [-5, 0], [-5, 0]])
 
     super().__init__()
+
+    self.state_names = ['1', '2', '3']
+    self.input_names = ['u_1', 'u_2', 'u_3']
 
   def f(self, state, u):
     A = np.array([[1, 1, 0], [1, 1, 1], [0, 1, 1]])
@@ -186,6 +204,9 @@ class Cartpole(System):
 
     super().__init__()
   
+    self.state_names = ['x', 'alpha', 'v', 'omega']
+    self.input_names = ['f']
+
   def f(self, state, u):
     x = state
     q2 = x[2]
@@ -214,6 +235,9 @@ class DoubleCartpole(System):
     self.input_limits = np.array([[-80, 80]])
 
     super().__init__()
+
+    self.state_names = ['x', 'theta_1', 'theta_2', 'v', 'w_1', 'w_2']
+    self.input_names = ['f']
 
   def f(self, state, u):
     x = state
@@ -280,6 +304,9 @@ class Quadcopter2D(System):
 
     super().__init__()
 
+    self.state_names = ['x', 'y', 'alpha', 'v_x', 'v_y', 'omega']
+    self.input_names = ['f1', 'f2']
+
   def f(self, state, u):
     x = state
 
@@ -312,6 +339,9 @@ class ChainOfMasses(System):
     self.input_limits = np.array([[-1, 1], [-1, 1]])
 
     super().__init__()
+
+    self.state_names = ['tmp']
+    self.input_names = ['tmp']
 
   def f(self, state, u):
     x = state
@@ -356,7 +386,10 @@ class CSTR(System):
     self.input_limits = np.array([[5, 100], [-8500, 0.0]])
 
     super().__init__()
-  
+
+    self.state_names = ['tmp']
+    self.input_names = ['tmp']
+
   # taken from https://www.do-mpc.com/en/latest/example_gallery/CSTR.html
   def f(self, state, u):
     C_a, C_b, T_R, T_K = state
@@ -409,7 +442,10 @@ class BatchBioreactor(System):
     self.input_limits = np.array([[0, 0.2]])
 
     super().__init__()
-  
+
+    self.state_names = ['tmp']
+    self.input_names = ['tmp']
+
   def f(self, state, u):
     X_s, S_s, P_s, V_s = state
     inp = u[0]
@@ -448,6 +484,9 @@ class Racecar(System):
     # self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
 
     super().__init__()
+
+    self.state_names = ['x', 'y', 'phi', 'v_x', 'v_y', 'omega']
+    self.input_names = ['acc', 'steer']
 
   def f(self, state, u):
     x, y, phi, v_x, v_y, omega = state
@@ -513,9 +552,12 @@ class Unicycle(System):
     # self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
 
     super().__init__()
+    
+    self.state_names = ['x', 'y', 'phi']
+    self.input_names = ['v', 'w']
 
   def f(self, state, u):
-    x, y, theta = state
+    _, _, theta = state
     us, uw = u
 
     x_dot = us * jnp.cos(theta)
@@ -534,6 +576,9 @@ class Unicycle2ndOrder(System):
     self.input_limits = np.array([[-0.1, 5], [-3, 3]])
 
     super().__init__()
+    
+    self.state_names = ['x', 'y', 'phi', 'v', 'omega']
+    self.input_names = ['a', 'wd']
 
   def f(self, state, u):
     x, y, theta, v, omega = state
@@ -559,6 +604,9 @@ class Acrobot(System):
 
     super().__init__()
 
+    self.state_names = ['theta_1', 'theta_2', 't1_d', 't2d']
+    self.input_names = ['tau']
+
   # http://incompleteideas.net/book/ebook/node110.html
   def f(self, state, u):
     theta_1, theta_2, theta_1_dot, theta_2_dot = state
@@ -582,7 +630,6 @@ class Acrobot(System):
 
     return jnp.asarray([theta_1_dot, theta_2_dot, theta_1_ddot, theta_2_ddot])
 
-
 class CarWithTrailer(System):
   def __init__(self):
     # x, y, theta, beta
@@ -594,6 +641,9 @@ class CarWithTrailer(System):
     self.input_limits = np.array([[-0.1, 5], [-3, 3]])
 
     super().__init__()
+        
+    self.state_names = ['x', 'y', 'theta', 'beta']
+    self.input_names = ['v', 'alpha']
 
   # https://ch.mathworks.com/help/mpc/ug/truck-and-trailer-automatic-parking-using-multistage-mpc.html
   def f(self, state, u):
