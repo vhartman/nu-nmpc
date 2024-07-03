@@ -419,7 +419,7 @@ class NMPCC(Controller):
     else:
       self.ref = lambda t: reference
 
-    ts = np.linspace(0, 4, 100)
+    ts = np.linspace(0, 12, 300)
     pts = [self.ref(t) for t in ts]
     self.path = make_interp_spline(ts, pts)
     self.path_derivative = self.path.derivative(1)
@@ -440,15 +440,30 @@ class NMPCC(Controller):
     self.input_scaling = np.array([1] * self.sys.input_dim)
     self.state_scaling = np.array([1] * self.sys.state_dim)
 
+    self.progress_bounds = np.array([[0, 12], [0, 5]])
+    self.progress_input_bounds = np.array([[-5, 5]])
+
+    self.contouring_weight = 0.5
+    self.progress_weight = 0.1
+
+    self.input_reg = 1e-4
+    self.progress_acc_reg = 1e-2
+
+    self.lag_weight = 500
+    self.cont_weight = 0.05
+
     # solver params
-    self.sqp_iters = 3
+    self.sqp_iters = 2
     self.sqp_mixing = 0.8
 
     self.first_run = True
 
     self.linearization = jax.jit(self.sys.linearization)
 
-    self.constraints_with_slack = True
+    self.state_constraints_with_slack = True
+
+    self.track_constraints = True
+    self.track_constraints_with_slack = True
 
     self.move_blocking = False
     self.blocks = None
@@ -490,11 +505,16 @@ class NMPCC(Controller):
       self.prev_u = new_u
 
   def project_state_to_progess(self, state):
+    prev_theta = 0
+    if not self.first_run:
+      prev_theta = self.prev_p[0, 0]
+
     min_error = 1e6
     theta_best = 0
     for t in np.linspace(0, 4, 1000):
       e = self.error(state, t)
-      if e < min_error:
+      if abs(t - prev_theta) < 0.2 and e < min_error:
+      # if e < min_error:
         min_error = e
         theta_best = t
 
@@ -505,7 +525,7 @@ class NMPCC(Controller):
 
     if self.first_run:
       for i in range(self.N+1):
-        self.prev_p.append(np.array([theta + i*0.01, 0.01]))
+        self.prev_p.append(np.array([theta, 0.05]))
 
       self.prev_p = np.array(self.prev_p).T
     else:
@@ -515,7 +535,7 @@ class NMPCC(Controller):
       new_p = f(times + self.dts[0])
       
       self.prev_p = new_p
-      self.prev_p[:, 0] = theta
+      self.prev_p[0, 0] = theta
     
   def compute_initial_progress_input_guess(self):
     if self.first_run:
@@ -526,10 +546,10 @@ class NMPCC(Controller):
     else:
       times = np.array([0] + list(np.cumsum(self.dts[:-1])))
 
-      print(times)
-      print(len(times))
-      print(self.prev_up)
-      print(len(self.prev_up))
+      # print(times)
+      # print(len(times))
+      # print(self.prev_up)
+      # print(len(self.prev_up))
       f = interp1d(times, self.prev_up, axis=1, bounds_error=False, fill_value=self.prev_up[:, -1])
       new_up = f(times + self.dts[0])
       
@@ -539,8 +559,11 @@ class NMPCC(Controller):
     residual = self.path(theta) - self.H @ q[:, None]
     return residual.T @ residual
 
-  def error_quad_approx(self, q, theta):
-    residual = self.path(theta) - self.H @ q[:, None]
+  def error_quad_approx(self, q, theta, proj = None):
+    if proj is None:
+      proj = np.eye(len(self.path(theta)))
+
+    residual = (self.path(theta) - self.H @ q[:, None])
 
     # print('state', q)
     # print('path', self.path(theta))
@@ -557,25 +580,53 @@ class NMPCC(Controller):
     # print("path hessian", path_hess)
 
     # Compute the gradient
-    grad_theta = 2 * (self.path_derivative(theta).T @ residual)
-    grad_q = -2 * (self.H.T @ residual)
+    grad_theta = (self.path_derivative(theta).T @ proj.T @ proj @ residual)
+    grad_q = - (self.H.T @ proj.T @ proj @ residual)
 
     # Compute the Hessian
-    hess_theta = 2 * (path_jac.T @ path_jac + path_hess.T @ residual)
+    # hess_theta = (path_jac.T @ proj.T @ proj @ path_jac + path_hess.T @ proj.T @ proj @ residual)
+    hess_theta = (path_jac.T @ proj.T @ proj @ path_jac)
     # hess_theta = 2 * (path_jac.T @ path_jac)
-    hess_q = 2 * (self.H.T @ self.H)
-    hess_theta_q = -2 * (path_jac.T @ self.H)
+    hess_q = (self.H.T @ proj.T @ proj @ self.H)
+    hess_theta_q = -(path_jac.T @ proj.T @ proj @ self.H)
 
-    print("other part", path_jac.T @ path_jac)
-    print("residual thingy:", path_hess.T @ residual)
+    # print("other part", path_jac.T @ path_jac)
+    # print("residual thingy:", path_hess.T @ residual)
 
     return hess_q, hess_theta, hess_theta_q, grad_q, grad_theta
+
+  def lag_error(self, q, theta):
+    tangent = self.path_derivative(theta)
+    tangent = tangent / np.linalg.norm(tangent)
+    mat = tangent @ tangent.T
+
+    mat = 0.5 * mat + 0.5 * mat.T
+
+    # print('proj mat')
+    # print(mat)
+
+    return self.error_quad_approx(q, theta, mat)
+
+  def contouring_error(self, q, theta):
+    tangent = self.path_derivative(theta)
+    tangent = tangent / np.linalg.norm(tangent)
+
+    mat = np.eye(len(tangent)) - tangent @ tangent.T
+
+    print('other proj mat')
+    print(mat)
+    
+    return self.error_quad_approx(q, theta, mat)
 
   def compute(self, state, t):
     x = cp.Variable((self.state_dim, self.N+1))
     u = cp.Variable((self.input_dim, self.N))
 
-    s = cp.Variable((self.state_dim, (self.N+1)*2))
+    # state slack variables
+    s = cp.Variable((self.state_dim, self.N+1))
+
+    # reference slack variables
+    rs = cp.Variable((1, (self.N+1)))
 
     p = cp.Variable((2, self.N+1))
     up = cp.Variable((1, self.N))
@@ -631,11 +682,23 @@ class NMPCC(Controller):
         prev_progress = self.prev_p[:, i]
         prev_input = self.prev_up[:, i]
 
+        # print(i)
+        # print('progress at time ', prev_progress[0])
+        # print('prog vel at time ', prev_progress[1])
+        # print('prog. acc. at time ', prev_input[0])
+        # print('delta t (progress)', dt)
+
         A, B, K = self.progress_linearization(prev_progress, prev_input, dt)
+
+        # print(A)
+        # print(B)
 
         constraints.append(
           p[:, next_idx][:, None] == A @ p[:, idx][:, None] + B @ up[:, idx][:, None] - K
         )
+      
+      theta = self.project_state_to_progess(state)
+      constraints.append(p[0, 0] == theta)
 
       # input constraints
       for i in range(self.N):
@@ -644,15 +707,12 @@ class NMPCC(Controller):
 
       # progress constraints
       for i in range(self.N):
-        constraints.append(up[0, i] >= -10)
-        constraints.append(up[0, i] <= 10)
+        constraints.append(up[:, i] >= self.progress_input_bounds[:, 0])
+        constraints.append(up[:, i] <= self.progress_input_bounds[:, 1])
     
       for i in range(self.N+1):
-        constraints.append(p[1, i] >= 0)
-        constraints.append(p[1, i] <= 2)
-
-        constraints.append(p[0, i] >= 0)
-        constraints.append(p[0, i] <= 3)
+        constraints.append(p[:, i] >= self.progress_bounds[:, 0])
+        constraints.append(p[:, i] <= self.progress_bounds[:, 1])
 
       if self.move_blocking:
         idx = 0
@@ -665,14 +725,14 @@ class NMPCC(Controller):
           idx += block_len
 
       # state constraints
-      if self.constraints_with_slack:
+      if self.state_constraints_with_slack:
         if not self.first_run:
           for i in range(self.N + 1):
-            constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i*2][:, None])
-            constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i*2+1][:, None])
+            constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i][:, None])
+            constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i][:, None])
 
         # slack variables
-        for i in range((self.N + 1)*2):
+        for i in range((self.N + 1)):
           constraints.append(s[:, i] >= 0)
       else:
         if not self.first_run:
@@ -680,17 +740,30 @@ class NMPCC(Controller):
             constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
             constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
 
+      if self.track_constraints:
+        for i in range(1, self.N+1):
+          # print(self.path(self.prev_p[0, i]))
+          residual = self.H @ x[:, i][:, None] - self.path(self.prev_p[0, i])
+          # constraints.append(residual.T @ residual <= 0.5)
+
+          if self.track_constraints_with_slack:
+            constraints.append(cp.sum_squares(residual) <= 0.15**2 + rs[0, i])
+            constraints.append(rs[0, i] >= 0)
+          else:
+            constraints.append(cp.sum_squares(residual) <= 0.15**2)
+
       cost = 0
 
       # TODO: normalize cost by total prediction horizn?
-      Rs = 0.000001 * Winv @ np.eye(self.input_dim) @ Winv
+      Rs = self.input_reg * Winv @ np.eye(self.input_dim) @ Winv
 
-      curr_time = t
+      # curr_time = t
       for i in range(self.N): 
         dt = self.dts[i]
         cost += dt * cp.quad_form(u[:,i][:, None], Rs)
+        cost += dt * self.progress_acc_reg * up[0, i]**2
 
-        curr_time += dt
+        # curr_time += dt
 
       for i in range(1, self.N+1):
         dt = self.dts[i-1]
@@ -699,9 +772,32 @@ class NMPCC(Controller):
         prev_progress = self.prev_p[:, i]
         prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
 
-        print("Step", i)
-        hess_q, hess_theta, hess_theta_q, grad_q, grad_theta = self.error_quad_approx(prev_state, prev_progress[0])
+        # print("Step", i)
+        # print(prev_progress)
+        
+        # hess_q, hess_theta, hess_theta_q, grad_q, grad_theta = self.error_quad_approx(prev_state, prev_progress[0])
+        
+        hess_lag_q, hess_lag_theta, hess_lag_theta_q, grad_lag_q, grad_lag_theta = self.lag_error(prev_state, prev_progress[0])
+        hess_cont_q, hess_cont_theta, hess_cont_theta_q, grad_cont_q, grad_cont_theta = self.contouring_error(prev_state, prev_progress[0])
 
+        lw = self.lag_weight
+        cw = self.cont_weight
+
+        hess_q = lw * hess_lag_q + cw * hess_cont_q
+        hess_theta = lw * hess_lag_theta + cw * hess_cont_theta
+        hess_theta_q = lw * hess_lag_theta_q + cw * hess_cont_theta_q
+
+        grad_q = lw * grad_lag_q + cw * grad_cont_q
+        grad_theta = lw * grad_lag_theta + cw * grad_cont_theta
+
+        # print("lags")
+        # print(hess_lag_q)
+        # print(hess_lag_theta)
+        # print(hess_lag_theta_q)
+        # print(grad_lag_q)
+        # print(grad_lag_theta)
+
+        # print('combination')
         # print(hess_q)
         # print(hess_theta)
         # print(hess_theta_q)
@@ -711,7 +807,7 @@ class NMPCC(Controller):
         hess = np.block([[hess_q, hess_theta_q.T],
                          [hess_theta_q, hess_theta]])
         
-        hess  = 0.5 * hess + 0.5 * hess.T #+ np.eye(hess.shape[0]) * 0.001
+        hess  = 0.5 * hess + 0.5 * hess.T + np.eye(hess.shape[0]) * 1e-4
         
         p_reshaped = cp.reshape(p[0, i], (1, 1))
         x_reshaped = cp.reshape(Sinv @ x[:, i][:, None], (self.state_dim, 1))
@@ -719,8 +815,7 @@ class NMPCC(Controller):
 
         offset = np.vstack((prev_state[:, None], prev_progress[0]))
 
-        w = 50
-        cost += dt * w * 0.5 * cp.quad_form(tmp - offset, hess)
+        cost += dt * self.contouring_weight * 0.5 * cp.quad_form(tmp - offset, hess)
 
         # np.set_printoptions(precision=3)
         # print(hess)
@@ -735,25 +830,31 @@ class NMPCC(Controller):
         # cost += 0.5 * hess_theta * p[0, i]**2
         # cost += p[0, i] * hess_theta_q @ x[:, i] [:, None]
 
-        cost += dt * w * grad_q.T @ Sinv @ x[:, i][:, None]
-        cost += dt * w * grad_theta.flatten() * p[0, i]
+        cost += dt * self.contouring_weight * grad_q.T @ Sinv @ (x[:, i][:, None] - prev_state[:, None])
+        cost += dt * self.contouring_weight * grad_theta.flatten() * (p[0, i] - prev_progress[0])
 
-        cost -= dt * 0.1 * p[1, i]
+      for i in range(0, self.N):
+        dt = self.dts[i]
+        cost -= dt * self.progress_weight * p[1, i]
 
       # cost = cost * 10
       # cost = cost / 1000
-      cost = cost * 10
-      # cost = cost / 10
+      # cost = cost * 10
+      cost = cost / 10
 
       # slack variables
-      if self.constraints_with_slack:
+      if self.state_constraints_with_slack:
         for i in range(self.N):
           dt = self.dts[i]
-          cost += dt * 10 * cp.sum(s[:, (i+1)*2])
-          cost += dt * 10 * cp.sum(s[:, (i+1)*2+1])
+          cost += dt * 10 * cp.sum(s[:, (i+1)])
+          cost += dt * 500 * cp.sum_squares(s[:, (i+1)])
 
-          cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2])
-          cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2+1])
+      
+      if self.track_constraints and self.track_constraints_with_slack:
+        for i in range(self.N):
+          dt = self.dts[i]
+          cost += dt * 10 * cp.sum(rs[0, (i+1)])
+          cost += dt * 500 * cp.sum_squares(rs[0, (i+1)])
 
       objective = cp.Minimize(cost)
 
@@ -814,6 +915,7 @@ class NMPCC(Controller):
 
       # print("B")
       # print(data['b'])
+      print('progress', p.value[:, -1])
 
     if prob.status not in ["infeasible", "unbounded"]:
       print("U")
