@@ -477,7 +477,7 @@ class Racecar(System):
     self.state_dim = 6
     self.input_dim = 2
 
-    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [0.3, 3.5], [-2, 2], [-7, 7]])
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [-0.1, 4], [-2, 2], [-7, 7]])
     self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
 
     # self.state_limits = np.array([[-20, 20], [-20, 20], [-10, 10], [0.3, 3.5], [-2, 2], [-7, 7]])
@@ -512,6 +512,10 @@ class Racecar(System):
     C_f = 1.2
     D_f = 0.192
 
+    # make everything play nicely if v_x < 0.1
+    v_x = jnp.maximum(v_x, 0.1)
+    v_y = jax.lax.cond(v_x > 0.1, lambda: v_y, lambda: 0.)
+
     alpha_f = -jnp.arctan2((omega * l_f + v_y), v_x) + delta
     F_f_y = D_f * jnp.sin(C_f * jnp.arctan(B_f*alpha_f))
 
@@ -538,7 +542,93 @@ class Racecar(System):
     return jnp.asarray([x_dot, y_dot, phi_dot, v_x_dot, v_y_dot, omega_dot])
 
 class AMZRacecar(System):
-  pass
+  def __init__(self):
+    self.state_dim = 8
+    self.input_dim = 2
+
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [-0.1, 3.5], [-2, 2], [-7, 7], [-0.1, 1], [-0.35, 0.35]])
+    self.input_limits = np.array([[-5, 5], [-5, 5]])
+
+    # self.state_limits = np.array([[-20, 20], [-20, 20], [-10, 10], [0.3, 3.5], [-2, 2], [-7, 7]])
+    # self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
+
+    super().__init__()
+
+    self.state_names = ['x', 'y', 'phi', 'v_x', 'v_y', 'omega', 'acc', 'steer']
+    self.input_names = ['acc_d', 'steer_d']
+
+  def f(self, state, u):
+    m = 0.041
+    I_z = 27.8e-6
+    l_f = 0.029
+    l_r = 0.033
+
+    C_m_1 = 0.287
+    C_m_2 = 0.0545
+    Cr0 = 0.0518
+    Cr2 = 0.00035
+
+    B_r = 3.3852
+    C_r = 1.2691
+    D_r = 0.1737
+
+    B_f = 2.579
+    C_f = 1.2
+    D_f = 0.192
+
+    def f_dyn(state, u):
+      x, y, phi, v_x, v_y, omega, d, delta = state
+      d_dot, delta_dot = u
+
+      v_x = jnp.maximum(v_x, 0.1)
+      alpha_f = -jnp.arctan2((omega * l_f + v_y), v_x) + delta
+      # print(alpha_f)
+      F_f_y = D_f * jnp.sin(C_f * jnp.arctan(B_f*alpha_f))
+      # print(F_f_y)
+
+      alpha_r = jnp.arctan2((omega*l_r - v_y), v_x)
+      F_r_y = D_r * jnp.sin(C_r * jnp.arctan(B_r*alpha_r))
+
+      F_r_x = (C_m_1 - C_m_2 * v_x)*d - Cr0 - Cr2*v_x**2
+
+      x_dot = v_x * jnp.cos(phi) - v_y * jnp.sin(phi)
+      y_dot = v_x * jnp.sin(phi) + v_y * jnp.cos(phi)
+      phi_dot = omega
+
+      v_x_dot = 1/m * (F_r_x - F_f_y * jnp.sin(delta) + m*v_y*omega)
+      v_y_dot = 1/m * (F_r_y + F_f_y * jnp.cos(delta) - m*v_x*omega)
+      omega_dot = 1/I_z * (F_f_y * l_f*jnp.cos(delta) - F_r_y * l_r)
+
+      return jnp.asarray([x_dot, y_dot, phi_dot, v_x_dot, v_y_dot, omega_dot, d_dot, delta_dot])
+
+    # kinematic model
+    def f_kin(state, u):
+      x, y, phi, v_x, v_y, omega, d, delta = state
+      d_dot, delta_dot = u
+
+      F_r_x = C_m_1*d - Cr0 - Cr2*v_x**2
+  
+      x_dot = v_x * jnp.cos(phi) - v_y * jnp.sin(phi)
+      y_dot = v_x * jnp.sin(phi) + v_y * jnp.cos(phi)
+      phi_dot = omega
+
+      v_x_dot = F_r_x/m
+      v_y_dot = (delta_dot * v_x + delta * v_x_dot) * l_r / (l_r + l_f)
+      omega_dot = (delta_dot * v_x + delta * v_x_dot) * 1. / (l_r + l_f)
+      
+      return jnp.asarray([x_dot, y_dot, phi_dot, v_x_dot, v_y_dot, omega_dot, d_dot, delta_dot])
+
+    x, y, phi, v_x, v_y, omega, d, delta = state
+
+    v_x_blend_min = 0.5
+    v_x_blend_max = 1.5
+
+    v_x_stop_grad = jax.lax.stop_gradient(v_x)
+
+    blend = jnp.minimum(jnp.maximum((v_x_stop_grad - v_x_blend_min) / (v_x_blend_max - v_x_blend_min), 0), 1)
+    res = blend * f_dyn(state, u) + (1-blend) * f_kin(state, u)
+
+    return res
 
 class Unicycle(System):
   def __init__(self):
