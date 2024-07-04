@@ -437,7 +437,7 @@ class NMPCC(Controller):
     else:
       self.ref = lambda t: reference
 
-    ts = np.linspace(0, 20, 300)
+    ts = np.linspace(0, 20, 1000)
     pts = [self.ref(t) for t in ts]
     self.path = make_interp_spline(ts, pts)
     self.path_derivative = self.path.derivative(1)
@@ -455,11 +455,14 @@ class NMPCC(Controller):
     self.prev_p = []
     self.prev_up = []
 
-    self.input_scaling = np.array([1] * self.sys.input_dim)
     self.state_scaling = np.array([1] * self.sys.state_dim)
+    self.input_scaling = np.array([1] * self.sys.input_dim)
 
     self.progress_bounds = np.array([[0, 20], [0, 5]])
     self.progress_input_bounds = np.array([[-5, 5]])
+
+    self.progress_scaling = np.array([1, 1])
+    self.progress_acc_scaling = np.array([1])
 
     self.contouring_weight = 0.5
     self.progress_weight = 0.1
@@ -467,7 +470,7 @@ class NMPCC(Controller):
     self.input_reg = 1e-4
     self.progress_acc_reg = 1e-2
 
-    self.lag_weight = 500
+    self.lag_weight = 1000
     self.cont_weight = 0.05
 
     # solver params
@@ -599,15 +602,15 @@ class NMPCC(Controller):
     # print("path hessian", path_hess)
 
     # Compute the gradient
-    grad_theta = (self.path_derivative(theta).T @ proj.T @ proj @ residual)
-    grad_q = - (self.H.T @ proj.T @ proj @ residual)
+    grad_theta = 2 * (self.path_derivative(theta).T @ proj.T @ proj @ residual)
+    grad_q = - 2 * (self.H.T @ proj.T @ proj @ residual)
 
     # Compute the Hessian
     # hess_theta = (path_jac.T @ proj.T @ proj @ path_jac + path_hess.T @ proj.T @ proj @ residual)
-    hess_theta = (path_jac.T @ proj.T @ proj @ path_jac)
+    hess_theta = 2 * (path_jac.T @ proj.T @ proj @ path_jac)
     # hess_theta = 2 * (path_jac.T @ path_jac)
-    hess_q = (self.H.T @ proj.T @ proj @ self.H)
-    hess_theta_q = -(path_jac.T @ proj.T @ proj @ self.H)
+    hess_q = 2 * (self.H.T @ proj.T @ proj @ self.H)
+    hess_theta_q = - 2*(path_jac.T @ proj.T @ proj @ self.H)
 
     # print("other part", path_jac.T @ path_jac)
     # print("residual thingy:", path_hess.T @ residual)
@@ -793,64 +796,50 @@ class NMPCC(Controller):
 
         # print("Step", i)
         # print(prev_progress)
-        
-        # hess_q, hess_theta, hess_theta_q, grad_q, grad_theta = self.error_quad_approx(prev_state, prev_progress[0])
-        
-        hess_lag_q, hess_lag_theta, hess_lag_theta_q, grad_lag_q, grad_lag_theta = self.lag_error(prev_state, prev_progress[0])
-        hess_cont_q, hess_cont_theta, hess_cont_theta_q, grad_cont_q, grad_cont_theta = self.contouring_error(prev_state, prev_progress[0])
 
         lw = self.lag_weight
         cw = self.cont_weight
 
-        hess_q = lw * hess_lag_q + cw * hess_cont_q
-        hess_theta = lw * hess_lag_theta + cw * hess_cont_theta
-        hess_theta_q = lw * hess_lag_theta_q + cw * hess_cont_theta_q
+        if False:
+          # hess_q, hess_theta, hess_theta_q, grad_q, grad_theta = self.error_quad_approx(prev_state, prev_progress[0])
+          
+          hess_lag_q, hess_lag_theta, hess_lag_theta_q, grad_lag_q, grad_lag_theta = self.lag_error(prev_state, prev_progress[0])
+          hess_cont_q, hess_cont_theta, hess_cont_theta_q, grad_cont_q, grad_cont_theta = self.contouring_error(prev_state, prev_progress[0])
 
-        grad_q = lw * grad_lag_q + cw * grad_cont_q
-        grad_theta = lw * grad_lag_theta + cw * grad_cont_theta
+          hess_q = lw * hess_lag_q + cw * hess_cont_q
+          hess_theta = lw * hess_lag_theta + cw * hess_cont_theta
+          hess_theta_q = lw * hess_lag_theta_q + cw * hess_cont_theta_q
 
-        # print("lags")
-        # print(hess_lag_q)
-        # print(hess_lag_theta)
-        # print(hess_lag_theta_q)
-        # print(grad_lag_q)
-        # print(grad_lag_theta)
+          grad_q = lw * grad_lag_q + cw * grad_cont_q
+          grad_theta = lw * grad_lag_theta + cw * grad_cont_theta
 
-        # print('combination')
-        # print(hess_q)
-        # print(hess_theta)
-        # print(hess_theta_q)
-        # print(grad_q)
-        # print(grad_theta)
+          hess = np.block([[hess_q, hess_theta_q.T],
+                           [hess_theta_q, hess_theta]])
+          
+          hess  = 0.5 * hess + 0.5 * hess.T + np.eye(hess.shape[0]) * 1e-4
+          
+          p_reshaped = cp.reshape(p[0, i], (1, 1))
+          x_reshaped = cp.reshape(Sinv @ x[:, i][:, None], (self.state_dim, 1))
+          tmp = cp.vstack([x_reshaped, p_reshaped])
 
-        hess = np.block([[hess_q, hess_theta_q.T],
-                         [hess_theta_q, hess_theta]])
-        
-        hess  = 0.5 * hess + 0.5 * hess.T + np.eye(hess.shape[0]) * 1e-4
-        
-        p_reshaped = cp.reshape(p[0, i], (1, 1))
-        x_reshaped = cp.reshape(Sinv @ x[:, i][:, None], (self.state_dim, 1))
-        tmp = cp.vstack([x_reshaped, p_reshaped])
+          offset = np.vstack((prev_state[:, None], prev_progress[0]))
 
-        offset = np.vstack((prev_state[:, None], prev_progress[0]))
+          cost += dt * self.contouring_weight * 0.5 * cp.quad_form(tmp - offset, hess)
 
-        cost += dt * self.contouring_weight * 0.5 * cp.quad_form(tmp - offset, hess)
+          cost += dt * self.contouring_weight * grad_q.T @ Sinv @ (x[:, i][:, None] - prev_state[:, None])
+          cost += dt * self.contouring_weight * grad_theta.flatten() * (p[0, i] - prev_progress[0])
+        else:
+          tangent = self.path_derivative(prev_progress[0])
+          tangent_norm = tangent / np.linalg.norm(tangent)
+          lag = tangent_norm @ tangent_norm.T
+          lag = 0.5 * lag + 0.5 * lag.T
 
-        # np.set_printoptions(precision=3)
-        # print(hess)
+          cont = np.eye(len(tangent_norm)) - lag
+          cont = 0.5 * cont + 0.5 * cont.T
 
-        # def is_pos_def(x):
-        #   print("EV:", np.linalg.eigvals(x))
-        #   return np.all(np.linalg.eigvals(x) > 0)
-        
-        # print(is_pos_def(hess))
-
-        # cost += 0.5 * cp.quad_form(x[:, i] [:, None], hess_q)
-        # cost += 0.5 * hess_theta * p[0, i]**2
-        # cost += p[0, i] * hess_theta_q @ x[:, i] [:, None]
-
-        cost += dt * self.contouring_weight * grad_q.T @ Sinv @ (x[:, i][:, None] - prev_state[:, None])
-        cost += dt * self.contouring_weight * grad_theta.flatten() * (p[0, i] - prev_progress[0])
+          cost += self.contouring_weight * dt * cp.quad_form(
+            (self.path(prev_progress[0]) + tangent * (p[0, i] - prev_progress[0])) - self.H @ Sinv @ x[:, i][:, None]
+            , cw * cont @ cont.T + lw * lag @ lag.T + np.eye(lag.shape[0]) * 1e-3)
 
       for i in range(0, self.N):
         dt = self.dts[i]
