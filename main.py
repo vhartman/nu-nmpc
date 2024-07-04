@@ -2202,7 +2202,7 @@ def mpcc_jerk_test():
   plt.show()
 
 def mpcc_racecar_test():
-  T_sim = 7
+  T_sim = 9
   dt = 0.05
 
   sys = Racecar()
@@ -2212,7 +2212,7 @@ def mpcc_racecar_test():
   # ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
   ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
 
-  state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5]))
+  state_scaling = 1 / (np.array([1, 1, 2*np.pi, 4, 2, 5]))
   input_scaling = 1 / (np.array([0.1, 0.35]))
   mapping = np.array([
     [1, 0, 0, 0, 0, 0],
@@ -2223,12 +2223,12 @@ def mpcc_racecar_test():
   # x[2] = np.pi/2
   # x[3] = 0.4
   x[2] = -np.pi/4
-  x[3] = 0.4
+  x[3] = 0.
 
   # dts = [dt]*20
   # dts = [dt]*10
-  # dts = get_linear_spacing(dt, 20 * dt, 10)
-  dts = get_power_spacing(dt, 20 * dt, 10)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_power_spacing(dt, 20 * dt, 10)
 
   nmpcc = NMPCC(sys, dts, mapping, ref)
   nmpcc.state_scaling = state_scaling
@@ -2237,6 +2237,8 @@ def mpcc_racecar_test():
   nmpcc.contouring_weight = .25
   nmpcc.cont_weight = .5
   nmpcc.progress_weight = 2
+  
+  nmpcc.diff_from_center = 0.15
 
   nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
 
@@ -2287,7 +2289,114 @@ def mpcc_racecar_test():
       polygon.set_transform(t + ax.transData)
     
     plt.figure()
-    plt.plot(times, states)
+    plt.plot(times, states, label=sys.state_names)
+    plt.legend()
+
+    plt.figure()
+    plt.plot(times[1:], inputs)
+
+    plt.figure()
+    plt.plot(computation_times)
+
+    # cost = 0
+    # for i in range(len(states)-1):
+    #   diff = (states[i][:, None] - ref(times[i]))
+    #   u = inputs[i][:, None]
+    #   cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    # print(cost)
+
+  plt.show()
+
+def mpcc_amzracecar_test():
+  T_sim = 9
+  dt = 0.05
+
+  sys = AMZRacecar()
+  x = np.zeros(8)
+
+  # ref = lambda t: np.array([figure_eight(t)[0], figure_eight(t)[1]]).reshape(-1, 1)
+  # ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+  ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
+
+  state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5, 1, 0.35]))
+  input_scaling = 1 / (np.array([5, 3]))
+  mapping = np.array([
+    [1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0],
+  ])
+
+  x = (mapping.T @ ref(0)).flatten()
+  # x[2] = np.pi/2
+  # x[3] = 0.4
+  x[2] = -np.pi/4
+  # x[3] = 0.4
+
+  # dts = [dt]*20
+  # dts = [dt]*10
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_power_spacing(dt, 20 * dt, 10)
+
+  nmpcc = NMPCC(sys, dts, mapping, ref)
+  nmpcc.state_scaling = state_scaling
+  nmpcc.input_scaling = input_scaling
+
+  nmpcc.contouring_weight = .25
+  nmpcc.cont_weight = .5
+  nmpcc.progress_weight = 2
+
+  nmpcc.diff_from_center = 0.1
+
+  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
+
+  for res in [nmpcc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+    
+    x = [states[i][0] for i in range(len(times))]
+    y = [states[i][1] for i in range(len(times))]
+
+    x_ref = [ref(times[i])[0] for i in range(len(times))]
+    y_ref = [ref(times[i])[1] for i in range(len(times))]
+
+    x_inner = [racetrack(times[i], track_inner)[0] for i in range(len(times))]
+    y_inner = [racetrack(times[i], track_inner)[1] for i in range(len(times))]
+    
+    x_outer = [racetrack(times[i], track_outer)[0] for i in range(len(times))]
+    y_outer = [racetrack(times[i], track_outer)[1] for i in range(len(times))]
+
+    plt.figure()
+    plt.plot(x, y)
+    plt.plot(x_ref, y_ref, '--', color='tab:orange')
+    
+    plt.plot(x_inner, y_inner, '--', color='black')
+    plt.plot(x_outer, y_outer, '--', color='black')
+    plt.axis('equal')
+
+    ax = plt.gca()
+
+    triangle = np.array([[0.5, 0], [-0.5, 0], [0, 1]]) * 0.05
+
+    for s in states[::20]:
+      # Create a polygon patch
+      polygon = patches.Polygon(triangle, closed=True, edgecolor='black', fill=True)
+
+      # Add the polygon to the current axis
+      ax.add_patch(polygon)
+
+      # Create a transformation for rotating the polygon
+      angle = (s[2] - np.pi/2) / np.pi * 180  # angle in degrees
+      origin = (0.0, 0.0)  # rotation origin
+      t = (transforms.Affine2D()
+          .rotate_deg_around(origin[0], origin[1], angle)
+          .translate(s[0], s[1]))
+      # Apply the transformation to the polygon
+      polygon.set_transform(t + ax.transData)
+    
+    plt.figure()
+    plt.plot(times, states, label=sys.state_names)
     plt.legend()
 
     plt.figure()
@@ -2360,9 +2469,10 @@ if __name__ == "__main__":
   # cartpole_test()
   # double_cartpole_test()
 
-  mpcc_test()
+  # mpcc_test()
   # mpcc_jerk_test()
-  # mpcc_racecar_test()
+  mpcc_racecar_test()
+  # mpcc_amzracecar_test()
 
   # ts = np.linspace(0, 4, 100)
   # x = [racetrack(t)[0] for t in ts]

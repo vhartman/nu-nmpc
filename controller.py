@@ -480,6 +480,7 @@ class NMPCC(Controller):
 
     self.state_constraints_with_slack = True
 
+    self.diff_from_center = 0.15
     self.track_constraints = True
     self.track_constraints_with_slack = True
 
@@ -765,10 +766,10 @@ class NMPCC(Controller):
           # constraints.append(residual.T @ residual <= 0.5)
 
           if self.track_constraints_with_slack:
-            constraints.append(cp.sum_squares(residual) <= 0.15**2 + rs[0, i])
+            constraints.append(cp.sum_squares(residual) <= self.diff_from_center**2 + rs[0, i])
             constraints.append(rs[0, i] >= 0)
           else:
-            constraints.append(cp.sum_squares(residual) <= 0.15**2)
+            constraints.append(cp.sum_squares(residual) <= self.diff_from_center**2)
 
       cost = 0
 
