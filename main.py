@@ -8,6 +8,7 @@ import time
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.transforms as transforms
+from matplotlib import cm
 
 from collections import namedtuple
 
@@ -2202,7 +2203,7 @@ def mpcc_jerk_test():
   plt.show()
 
 def mpcc_racecar_test():
-  T_sim = 9
+  T_sim = 5
   dt = 0.05
 
   sys = Racecar()
@@ -2250,6 +2251,7 @@ def mpcc_racecar_test():
     
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][1] for i in range(len(times))]
+    v = [states[i][3] for i in range(len(times))]
 
     x_ref = [ref(times[i])[0] for i in range(len(times))]
     y_ref = [ref(times[i])[1] for i in range(len(times))]
@@ -2261,7 +2263,7 @@ def mpcc_racecar_test():
     y_outer = [racetrack(times[i], track_outer)[1] for i in range(len(times))]
 
     plt.figure()
-    plt.plot(x, y)
+    plt.scatter(x, y, marker='.', c=cm.viridis(np.array(v)/max(v)), edgecolor='none')
     plt.plot(x_ref, y_ref, '--', color='tab:orange')
     
     plt.plot(x_inner, y_inner, '--', color='black')
@@ -2345,7 +2347,9 @@ def mpcc_amzracecar_test():
   nmpcc.cont_weight = .5
   nmpcc.progress_weight = 2
 
-  nmpcc.diff_from_center = 0.1
+  nmpcc.diff_from_center = 0.15
+
+  nmpcc.input_reg = 1e-2
 
   nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
 
@@ -2357,6 +2361,7 @@ def mpcc_amzracecar_test():
     
     x = [states[i][0] for i in range(len(times))]
     y = [states[i][1] for i in range(len(times))]
+    v = [states[i][3] for i in range(len(times))]
 
     x_ref = [ref(times[i])[0] for i in range(len(times))]
     y_ref = [ref(times[i])[1] for i in range(len(times))]
@@ -2368,7 +2373,7 @@ def mpcc_amzracecar_test():
     y_outer = [racetrack(times[i], track_outer)[1] for i in range(len(times))]
 
     plt.figure()
-    plt.plot(x, y)
+    plt.scatter(x, y, marker='.', c=cm.viridis(np.array(v)/max(v)), edgecolor='none')
     plt.plot(x_ref, y_ref, '--', color='tab:orange')
     
     plt.plot(x_inner, y_inner, '--', color='black')
@@ -2402,8 +2407,11 @@ def mpcc_amzracecar_test():
     plt.figure()
     plt.plot(times[1:], inputs)
 
-    plt.figure()
+    plt.figure('controller time')
     plt.plot(computation_times)
+
+    plt.figure('solver time')
+    plt.plot(res.solver_time)
 
     # cost = 0
     # for i in range(len(states)-1):
@@ -2462,6 +2470,7 @@ if __name__ == "__main__":
   # test_cstr()
   # test_batch_reactor()
 
+  # mpcc_debug()
   # make_T_curve()
   # make_dt_curve()
   # make_cost_computation_curve()
@@ -2471,8 +2480,8 @@ if __name__ == "__main__":
 
   # mpcc_test()
   # mpcc_jerk_test()
-  mpcc_racecar_test()
-  # mpcc_amzracecar_test()
+  # mpcc_racecar_test()
+  mpcc_amzracecar_test()
 
   # ts = np.linspace(0, 4, 100)
   # x = [racetrack(t)[0] for t in ts]
