@@ -386,6 +386,8 @@ class NU_NMPC(Controller):
   def compute(self, state, t):
     res = self.nmpc.compute(state, t)
     self.solve_time = self.nmpc.solve_time
+    self.prev_x = self.nmpc.prev_x
+    self.prev_u = self.nmpc.prev_u
     return res
 
 class MoveBlockingNMPC(Controller):
@@ -932,4 +934,65 @@ class NMPCC(Controller):
       # return u.value[:, 0]
 
     return np.zeros(self.sys.input_dim)
-  
+
+class PredictiveSampling(Controller):
+  def eval_cost(self, state, input):
+    x = state
+    cost = 0
+    for i, dt in enumerate(self.dts):
+      cost += dt * x.T @ self.cost.Q @ x + input[i].T @ self.cost.R @ input[i]
+      x = self.sys.step(x, input[i], dt, "rk4")
+
+    return cost
+
+  def __init__(self, system, dts, quadratic_cost, reference, var=None, num_rollouts=100):
+    self.sys = system
+    self.N = len(dts)
+    self.dt = dts
+
+    self.num_rollouts = num_rollouts
+
+    self.cost = quadratic_cost
+
+    if callable(reference):
+      self.ref = reference
+    else:
+      self.ref = lambda t: reference
+
+    self.state_dim = self.sys.state_dim
+    self.input_dim = self.sys.input_dim
+
+    if var is None:
+      self.var = np.eye(self.input_dim)
+    else:
+      self.var = var
+
+    self.prev_x = []
+    self.prev_u = []
+
+    self.vectorized_rollout = jax.vmap(self.eval_cost, in_axes=(None, 0))
+    self.jitted_rollout = jax.jit(self.vectorized_rollout)
+
+    self.key = jax.random.PRNGKey(0)
+
+  def compute(self, state):
+    random_parameters = self.var*jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim)))
+    # control_parameters_vec = best_control_parameters + additional_random_parameters
+
+    costs = self.jitted_rollout(state, random_parameters)
+    
+    best_index = jax.numpy.nanargmin(costs)
+    best_cost = costs.take(best_index)
+    best_control_parameters = random_parameters[best_index]
+
+    self.solve_time = 0
+    self.prev_x = 0
+    self.prev_u = 0
+
+    return best_control_parameters[0]
+
+class MPPI(Controller):
+  pass
+
+class iLQR(Controller):
+  pass
