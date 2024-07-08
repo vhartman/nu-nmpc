@@ -315,19 +315,6 @@ def get_linear_spacing_with_max_dt(T, dt0, dt_max, steps):
     
     ts = [np.min([dt + alpha * i, dt_max]) for i in range(N)]
     return sum(ts)
-    # k = (dt_max - dt) / alpha
-    # k_floor = math.floor(k)
-    
-    # if k <= 0:
-    #   return N * dt
-    # elif k >= N:
-    #   return sum(dt + alpha * i for i in range(N))
-    # else:
-    #   sum_before_k = sum(dt + alpha * i for i in range(k_floor))
-    #   partial_k = k - k_floor
-    #   sum_at_k = partial_k * dt_max + (1 - partial_k) * (dt + alpha * k_floor)
-    #   sum_after_k = (N - k_floor - 1) * dt_max
-    #   return sum_before_k + sum_at_k + sum_after_k
 
   def solve_for_alpha(target_T, dt0, dt_max, N, tolerance=1e-6, max_iterations=1000):
     alpha_min = 0
@@ -463,8 +450,8 @@ class NMPCC(Controller):
     self.progress_bounds = np.array([[0, 20], [0, 5]])
     self.progress_input_bounds = np.array([[-5, 5]])
 
-    self.progress_scaling = 1/ np.array([10, 5])
-    self.progress_acc_scaling = 1/ np.array([5])
+    self.progress_scaling = 1 / np.array([10, 5])
+    self.progress_acc_scaling = 1 / np.array([5])
 
     self.contouring_weight = 0.5
     self.progress_weight = 0.1
@@ -477,7 +464,7 @@ class NMPCC(Controller):
 
     # solver params
     self.sqp_iters = 2
-    self.sqp_mixing = 0.8
+    self.sqp_mixing = 0.25
 
     self.first_run = True
 
@@ -884,9 +871,10 @@ class NMPCC(Controller):
       # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-4, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
-      # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
-      result = prob.solve(solver='SCS', verbose=True, eps=1e-4, normalize=False, acceleration_lookback=-10)
+      result = prob.solve(solver='SCS', verbose=True, eps=1e-2)
+      # result = prob.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
       # result = prob.solve(solver='PIQP', verbose=True)
+      # result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
 
       # options_cvxopt = {
       #     "max_iters": 5000,

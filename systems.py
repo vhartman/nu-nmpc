@@ -513,8 +513,8 @@ class Racecar(System):
     D_f = 0.192
 
     # make everything play nicely if v_x < 0.1
-    v_x = jnp.maximum(v_x, 0.1)
-    v_y = jax.lax.cond(v_x > 0.1, lambda: v_y, lambda: 0.)
+    v_x = jnp.maximum(v_x, 0.3)
+    v_y = jax.lax.cond(v_x > 0.3, lambda: v_y, lambda: 0.)
 
     alpha_f = -jnp.arctan2((omega * l_f + v_y), v_x) + delta
     F_f_y = D_f * jnp.sin(C_f * jnp.arctan(B_f*alpha_f))

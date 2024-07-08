@@ -1,4 +1,5 @@
 import numpy as np
+import jax
 
 from systems import *
 from controller import *
@@ -10,9 +11,11 @@ import matplotlib.patches as patches
 import matplotlib.transforms as transforms
 from matplotlib import cm
 
+import matplotlib.animation as animation
+
 from collections import namedtuple
 
-ControllerResult = namedtuple('Result', ['times', 'states', 'inputs', 'solver_time', 'computation_time'])
+ControllerResult = namedtuple('Result', ['times', 'states', 'inputs', 'solver_time', 'computation_time', 'state_predictions', 'control_predictions'])
 
 def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
   xn = x0
@@ -21,9 +24,14 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
   states = [x0]
   inputs = []
 
+  state_pred = []
+  control_pred = []
+
   times = [0]
   computation_times_ms = []
   solve_times = []
+
+  fwd = jax.jit(lambda x, u, dt: system.step(x, u, dt, method="rk4"))
 
   for j in range(int(T_sim / dt_sim)):
     # print("x0")
@@ -37,7 +45,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
 
     # finer simulation
     for i in range(N_sim_iter):
-      xn = system.step(xn, u, dt_sim/N_sim_iter, method='heun')
+      xn = fwd(xn, u, dt_sim/N_sim_iter)
 
       #xn += np.random.randn(4) * 0.0001
 
@@ -49,7 +57,10 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     computation_times_ms.append((end - start) / 1e6)
     solve_times.append(controller.solve_time) 
 
-  return ControllerResult(times, states, inputs, solve_times, computation_times_ms)
+    state_pred.append(controller.prev_x)
+    control_pred.append(controller.prev_u)
+
+  return ControllerResult(times, states, inputs, solve_times, computation_times_ms, state_pred, control_pred)
 
 def double_cartpole_test():
   T_sim = 5
@@ -2203,7 +2214,7 @@ def mpcc_jerk_test():
   plt.show()
 
 def mpcc_racecar_test():
-  T_sim = 5
+  T_sim = 9
   dt = 0.05
 
   sys = Racecar()
@@ -2240,6 +2251,8 @@ def mpcc_racecar_test():
   nmpcc.progress_weight = 2
   
   nmpcc.diff_from_center = 0.15
+
+  nmpcc.input_reg = 1e-5
 
   nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
 
@@ -2312,7 +2325,7 @@ def mpcc_racecar_test():
 
 def mpcc_amzracecar_test():
   T_sim = 9
-  dt = 0.05
+  dt = 0.025
 
   sys = AMZRacecar()
   x = np.zeros(8)
@@ -2334,10 +2347,17 @@ def mpcc_amzracecar_test():
   x[2] = -np.pi/4
   # x[3] = 0.4
 
-  # dts = [dt]*20
+  # dts = [dt]*40
   # dts = [dt]*10
-  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_linear_spacing(dt, 20 * dt, 10)
+  dts = get_linear_spacing(dt, 40 * dt, 20)
+  # plt.plot(dts)
+
+  # dts = get_linear_spacing_with_max_dt(30 * dt, dt, 0.2, 10)
   # dts = get_power_spacing(dt, 20 * dt, 10)
+
+  # plt.plot(dts)
+  # plt.show()
 
   nmpcc = NMPCC(sys, dts, mapping, ref)
   nmpcc.state_scaling = state_scaling
@@ -2349,7 +2369,7 @@ def mpcc_amzracecar_test():
 
   nmpcc.diff_from_center = 0.15
 
-  nmpcc.input_reg = 1e-2
+  nmpcc.input_reg = 1e-5
 
   nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
 
@@ -2412,6 +2432,40 @@ def mpcc_amzracecar_test():
 
     plt.figure('solver time')
     plt.plot(res.solver_time)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(autoscale_on=False, xlim=(-2, 2), ylim=(-2, 2))
+    ax.set_aspect('equal')
+    ax.grid()
+    
+    ax.plot(x_ref, y_ref, '--', color='tab:orange')
+    
+    ax.plot(x_inner, y_inner, '--', color='black')
+    ax.plot(x_outer, y_outer, '--', color='black')
+
+    pred, = ax.plot([], [], '-')
+    path, = ax.plot([], [], '--')
+    
+    time_template = 'time = %.1fs'
+    time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
+
+    def animate(i):
+      x_pred = [res.state_predictions[i][0, j] for j in range((res.state_predictions[i].shape[1]))]
+      y_pred = [res.state_predictions[i][1, j] for j in range((res.state_predictions[i].shape[1]))]
+      
+      history_x = x[:i]
+      history_y = y[:i]
+
+      pred.set_data(x_pred, y_pred)
+      path.set_data(history_x, history_y)
+      time_text.set_text(time_template % (i*dt))
+
+      return pred, path, time_text
+    
+    ani = animation.FuncAnimation(
+      fig, animate, len(computation_times), interval=dt*1000, blit=True)
+
+    ani.save('animation.gif', writer='pillow', fps=30)
 
     # cost = 0
     # for i in range(len(states)-1):
