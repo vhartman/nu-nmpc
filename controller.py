@@ -935,20 +935,30 @@ class NMPCC(Controller):
 
     return np.zeros(self.sys.input_dim)
 
-class PredictiveSampling(Controller):
-  def eval_cost(self, state, input):
+class PredictiveRandomSampling(Controller):
+  def eval_cost(self, state, input, t):
     x = state
+    # jax.debug.print("{x}", x=x)
     cost = 0
     for i, dt in enumerate(self.dts):
-      cost += dt * x.T @ self.cost.Q @ x + input[i].T @ self.cost.R @ input[i]
-      x = self.sys.step(x, input[i], dt, "rk4")
+      diff = (x[:, None] - self.ref(t))
+
+      cost += dt * diff.T @ self.cost.Q @ diff
+      cost += dt * input[:, i][:, None].T @ self.cost.R @ input[:, i][:, None]
+
+      x = self.sys.step(x, input[:, i], dt, "rk4")
+
+      t += dt
+
+    diff = (x[:, None] - self.ref(t))
+    cost += diff.T @ self.cost.QN @ diff
 
     return cost
 
-  def __init__(self, system, dts, quadratic_cost, reference, var=None, num_rollouts=100):
+  def __init__(self, system, dts, quadratic_cost, reference, var=None, num_rollouts=10000):
     self.sys = system
     self.N = len(dts)
-    self.dt = dts
+    self.dts = dts
 
     self.num_rollouts = num_rollouts
 
@@ -970,16 +980,29 @@ class PredictiveSampling(Controller):
     self.prev_x = []
     self.prev_u = []
 
-    self.vectorized_rollout = jax.vmap(self.eval_cost, in_axes=(None, 0))
+    self.vectorized_rollout = jax.vmap(self.eval_cost, in_axes=(None, 0, None))
     self.jitted_rollout = jax.jit(self.vectorized_rollout)
+    # self.jitted_rollout = self.vectorized_rollout
 
     self.key = jax.random.PRNGKey(0)
 
-  def compute(self, state):
-    random_parameters = self.var*jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim)))
+    self.prev_best_control = jax.numpy.zeros(shape=(self.input_dim, self.N))
+
+  def compute(self, state, t):
+    # random_parameters = self.var @ jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim))
+    diff_random_parameters = jax.numpy.zeros(shape=(self.num_rollouts * 2, self.input_dim, self.N))
+    
+    diff_random_parameters = diff_random_parameters.at[0:self.num_rollouts].set(
+      10 * jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim, self.N)))
+    diff_random_parameters = diff_random_parameters.at[self.num_rollouts:].set(
+      jax.random.uniform(key=self.key, minval=-10, maxval=10, shape=(self.num_rollouts, self.input_dim, self.N)))
+
+    # random_parameters = self.prev_best_control + diff_random_parameters
+    random_parameters = diff_random_parameters
+
     # control_parameters_vec = best_control_parameters + additional_random_parameters
 
-    costs = self.jitted_rollout(state, random_parameters)
+    costs = self.jitted_rollout(state, random_parameters, t)
     
     best_index = jax.numpy.nanargmin(costs)
     best_cost = costs.take(best_index)
@@ -989,7 +1012,9 @@ class PredictiveSampling(Controller):
     self.prev_x = 0
     self.prev_u = 0
 
-    return best_control_parameters[0]
+    self.prev_best_control = best_control_parameters
+
+    return best_control_parameters[:, 0]
 
 class MPPI(Controller):
   pass

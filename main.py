@@ -145,7 +145,7 @@ def cartpole_test():
   x = np.zeros(4)
   x[2] = 0
   u = np.zeros(1)
-  dt = 0.05
+  dt = 0.025
 
   Q = np.diag([1, 0, 3, 0])
   ref = np.zeros((4, 1))
@@ -157,7 +157,7 @@ def cartpole_test():
 
   nmpc = NMPC(sys, 20, dt, quadratic_cost, ref)
 
-  dts = get_linear_spacing(dt, 20 * dt, 10)
+  dts = get_linear_spacing(dt, 40 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
   mpc_sol = eval(sys, nmpc, x, T_sim, dt)
@@ -313,27 +313,50 @@ def squircle(t):
   return np.array([x, 0, y, 0]).reshape((-1, 1))
 
 def square(t, side_length=1):
-  t = (float(t)) % 4
+  t = (t * 1.0) % 4
   half_side = side_length / 2
-  x = np.piecewise(t,
+  x = jax.numpy.piecewise(t,
                 [t < 1, (t >= 1) & (t < 2), (t >= 2) & (t < 3), t >= 3],
                 [lambda t: half_side,
                 lambda t: half_side - side_length * (t - 1),
                 lambda t: -half_side,
                 lambda t: -half_side + side_length * (t - 3)])
-  y = np.piecewise(t,
+  y = jax.numpy.piecewise(t,
                 [t < 1, (t >= 1) & (t < 2), (t >= 2) & (t < 3), t >= 3],
                 [lambda t: -half_side + side_length * t,
                 lambda t: half_side,
                 lambda t: half_side - side_length * (t - 2),
                 lambda t: -half_side])
   
-  return np.array([x, y])
+  return jax.numpy.asarray([x, y])
+
+# def square(t, side_length=1):
+#   t = (t * 1.0) % 4
+#   half_side = side_length / 2
+  
+#   def constant(value):
+#     return lambda t: jax.numpy.full_like(t, value)
+  
+#   x = jax.numpy.piecewise(t,
+#               [t < 1, (t >= 1) & (t < 2), (t >= 2) & (t < 3), t >= 3],
+#               [constant(half_side),
+#                lambda t: constant(half_side)(t) - side_length * (t - 1),
+#                constant(-half_side),
+#                lambda t: constant(-half_side)(t) + side_length * (t - 3)])
+  
+#   y = jax.numpy.piecewise(t,
+#               [t < 1, (t >= 1) & (t < 2), (t >= 2) & (t < 3), t >= 3],
+#               [lambda t: constant(-half_side)(t) + side_length * t,
+#                constant(half_side),
+#                lambda t: constant(half_side)(t) - side_length * (t - 2),
+#                constant(-half_side)])
+  
+#   return jax.numpy.asarray([x, y])
 
 def figure_eight(t, r=1):
-  x = np.sin(t) * r
-  y = np.sin(t) * np.cos(t) * r
-  return np.array([x, y])
+  x = jax.numpy.sin(t) * r
+  y = jax.numpy.sin(t) * jax.numpy.cos(t) * r
+  return jax.numpy.asarray([x, y])
 
 track_center = np.loadtxt('./track/center.txt')
 track_inner = np.loadtxt('./track/inner.txt')
@@ -348,9 +371,9 @@ def racetrack(t, track=track_center):
   return np.array([x, y])
 
 def test_masspoint_ref_path():
-  T_sim = 4
+  T_sim = 7
 
-  sys = MasspointND()
+  sys = MasspointND(2)
   x = np.zeros(4)
   x[2] = 5
   u = np.zeros(2)
@@ -358,7 +381,8 @@ def test_masspoint_ref_path():
   Q = np.diag([10, 0.01, 10, 0.01])
   R = np.diag([.01, .01])
 
-  ref = lambda t: np.array([figure_eight(t)[0], 0, figure_eight(t)[1], 0]).reshape(-1, 1)
+  ref = lambda t: jax.numpy.asarray([figure_eight(t)[0], 0, figure_eight(t)[1], 0]).reshape(-1, 1)
+  # ref = lambda t: jax.numpy.asarray([square(t)[0], 0, square(t)[1], 0]).reshape(-1, 1)
   x = ref(0).flatten()
 
   quadratic_cost = QuadraticCost(Q, R, Q * 0.01)
@@ -375,17 +399,23 @@ def test_masspoint_ref_path():
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
-  # dts = get_linear_spacing(dt, 20 * dt, 5)
-  dts = get_power_spacing(dt, 20 * dt, 10)
+  # dts = [dt] * 10
+  # dts = get_linear_spacing(dt, 5 * dt, 5)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_power_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  pred_rnd = PredictiveRandomSampling(sys, dts, quadratic_cost, ref)
 
-  for res in [mpc_sol, nu_mpc_sol]:
+  # mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  # nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  rnd_mpc_sol = eval(sys, pred_rnd, x, T_sim, dt)
+
+  for res in [rnd_mpc_sol]:
+  # for res in [mpc_sol, nu_mpc_sol]:
     times = res.times
     states = res.states
     inputs = res.inputs
@@ -2512,7 +2542,7 @@ if __name__ == "__main__":
   # test_racecar_ref_path()
   
   # test_masspoint()
-  # test_masspoint_ref_path()
+  test_masspoint_ref_path()
 
   # test_unicycle()
   # test_unicycle_ref_path()
@@ -2535,7 +2565,7 @@ if __name__ == "__main__":
   # mpcc_test()
   # mpcc_jerk_test()
   # mpcc_racecar_test()
-  mpcc_amzracecar_test()
+  # mpcc_amzracecar_test()
 
   # ts = np.linspace(0, 4, 100)
   # x = [racetrack(t)[0] for t in ts]
