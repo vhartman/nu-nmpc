@@ -1,6 +1,8 @@
 import numpy as np
 import math
+
 import jax
+import jax.numpy as jnp
 
 import time
 
@@ -943,13 +945,15 @@ class PredictiveRandomSampling(Controller):
     for i, dt in enumerate(self.dts):
       diff = (x[:, None] - self.ref(t))
 
+      # print(diff)
+
       cost += dt * diff.T @ self.cost.Q @ diff
       cost += dt * input[:, i][:, None].T @ self.cost.R @ input[:, i][:, None]
 
       state_lb_violation = (x[:, None] - self.sys.state_limits[:, 0][:, None]) > 0
       state_ub_violation = (x[:, None] - self.sys.state_limits[:, 1][:, None]) < 0
 
-      w_violation = 5
+      w_violation = 100
       lb_violation = (jax.numpy.sum(x[:, None] - self.sys.state_limits[:, 0][:, None], where=state_lb_violation))**2
       ub_violation = (jax.numpy.sum(x[:, None] - self.sys.state_limits[:, 1][:, None], where=state_ub_violation))**2
 
@@ -997,16 +1001,26 @@ class PredictiveRandomSampling(Controller):
     self.prev_best_control = jax.numpy.zeros(shape=(self.input_dim, self.N))
 
   def compute(self, state, t):
+    # shift prev best control
+    # self.prev_u = np.hstack((self.prev_u[:, 1:], self.prev_u[:, -1][:, None]))
+
+    times = np.array([0] + list(np.cumsum(self.dts[:-1])))
+
+    f = interp1d(times, self.prev_best_control, axis=1, bounds_error=False, fill_value=self.prev_best_control[:, -1])
+    new_u = f(times + self.dts[0])
+
+    self.prev_best_control = new_u
+
     # random_parameters = self.var @ jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim))
     diff_random_parameters = jax.numpy.zeros(shape=(self.num_rollouts * 2, self.input_dim, self.N))
     
     diff_random_parameters = diff_random_parameters.at[0:self.num_rollouts].set(
-      10 * jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim, self.N)))
+      1. * jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim, self.N)))
     diff_random_parameters = diff_random_parameters.at[self.num_rollouts:].set(
-      jax.random.uniform(key=self.key, minval=-10, maxval=10, shape=(self.num_rollouts, self.input_dim, self.N)))
+      jax.random.uniform(key=self.key, minval=-2, maxval=2, shape=(self.num_rollouts, self.input_dim, self.N)))
 
-    # random_parameters = self.prev_best_control + diff_random_parameters
-    random_parameters = diff_random_parameters
+    random_parameters = self.prev_best_control + diff_random_parameters
+    # random_parameters = diff_random_parameters
 
     random_parameters = jax.numpy.where(random_parameters < 10, random_parameters, 10)
     random_parameters = jax.numpy.where(random_parameters > -10, random_parameters, -10)
@@ -1028,7 +1042,122 @@ class PredictiveRandomSampling(Controller):
     return best_control_parameters[:, 0]
 
 class MPPI(Controller):
-  pass
+  def eval_cost(self, state, input, t):
+    x = state
+    # jax.debug.print("{x}", x=x)
+    cost = 0
+    for i, dt in enumerate(self.dts):
+      diff = (x[:, None] - self.ref(t))
+      # jax.debug.print("{diff}", diff=diff)
+      # print(diff)
+
+      cost += dt * diff.T @ self.cost.Q @ diff
+      cost += dt * input[:, i][:, None].T @ self.cost.R @ input[:, i][:, None]
+
+      state_lb_violation = (x[:, None] - self.sys.state_limits[:, 0][:, None]) > 0
+      state_ub_violation = (x[:, None] - self.sys.state_limits[:, 1][:, None]) < 0
+
+      w_violation = 10
+      lb_violation = (jax.numpy.sum(x[:, None] - self.sys.state_limits[:, 0][:, None], where=state_lb_violation))**2
+      ub_violation = (jax.numpy.sum(x[:, None] - self.sys.state_limits[:, 1][:, None], where=state_ub_violation))**2
+
+      cost += dt * w_violation * (lb_violation + ub_violation)
+      x = self.sys.step(x, input[:, i], dt, "rk4")
+
+      t += dt
+
+    diff = (x[:, None] - self.ref(t))
+    cost += diff.T @ self.cost.QN @ diff
+
+    return cost
+
+  def __init__(self, system, dts, quadratic_cost, reference, var=None, num_rollouts=100000):
+    self.sys = system
+    self.N = len(dts)
+    self.dts = dts
+
+    self.num_rollouts = num_rollouts
+
+    self.cost = quadratic_cost
+
+    if callable(reference):
+      self.ref = reference
+    else:
+      self.ref = lambda t: reference
+
+    self.state_dim = self.sys.state_dim
+    self.input_dim = self.sys.input_dim
+
+    if var is None:
+      self.var = np.ones(self.input_dim) * 20
+    else:
+      self.var = var
+
+    self.prev_x = []
+    self.prev_u = []
+
+    self.vectorized_rollout = jax.vmap(self.eval_cost, in_axes=(None, 0, None))
+    self.jitted_rollout = jax.jit(self.vectorized_rollout)
+    # self.jitted_rollout = self.vectorized_rollout
+
+    self.key = jax.random.PRNGKey(0)
+
+    self.prev_best_control = jax.numpy.zeros(shape=(self.input_dim, self.N))
+
+  def compute(self, state, t):
+    # shift prev best control
+    # self.prev_u = np.hstack((self.prev_u[:, 1:], self.prev_u[:, -1][:, None]))
+
+    times = np.array([0] + list(np.cumsum(self.dts[:-1])))
+
+    f = interp1d(times, self.prev_best_control, axis=1, bounds_error=False, fill_value=self.prev_best_control[:, -1])
+    new_u = f(times + self.dts[0])
+
+    self.prev_best_control = new_u
+
+    # random_parameters = self.var @ jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim))
+    diff_random_parameters = jax.numpy.zeros(shape=(self.num_rollouts * 2, self.input_dim, self.N))
+    
+    diff_random_parameters = diff_random_parameters.at[0:self.num_rollouts].set(
+      self.var[:, None] * jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim, self.N)))
+    diff_random_parameters = diff_random_parameters.at[self.num_rollouts:].set(
+      jax.random.uniform(key=self.key, minval=-2, maxval=2, shape=(self.num_rollouts, self.input_dim, self.N)))
+
+    random_parameters = self.prev_best_control + diff_random_parameters
+    # random_parameters = diff_random_parameters
+
+    random_parameters = jax.numpy.where(random_parameters < 10, random_parameters, 10)
+    random_parameters = jax.numpy.where(random_parameters > -10, random_parameters, -10)
+
+    # control_parameters_vec = best_control_parameters + additional_random_parameters
+
+    costs = self.jitted_rollout(state, random_parameters, t)
+    
+    best_index = jax.numpy.nanargmin(costs)
+    best_cost = costs.take(best_index)
+    best_control_parameters = random_parameters[best_index]
+
+    beta = best_cost
+    temp = 1.
+    exp_costs = jnp.exp((-1./temp) * (costs - beta))
+    denom = np.sum(exp_costs)
+    weights = exp_costs/denom
+    # print(weights)
+    # print(random_parameters)
+    # print(weights.shape)
+    # print(random_parameters.shape)
+    weighted_inputs = weights * random_parameters
+    best_control_parameters = jnp.sum(weighted_inputs, axis=0)
+
+    print(best_control_parameters)
+
+    self.solve_time = 0
+    self.prev_x = 0
+    self.prev_u = 0
+
+    self.prev_best_control = best_control_parameters
+
+    return best_control_parameters[:, 0]
 
 class iLQR(Controller):
   pass
