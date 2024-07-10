@@ -946,6 +946,14 @@ class PredictiveRandomSampling(Controller):
       cost += dt * diff.T @ self.cost.Q @ diff
       cost += dt * input[:, i][:, None].T @ self.cost.R @ input[:, i][:, None]
 
+      state_lb_violation = (x[:, None] - self.sys.state_limits[:, 0][:, None]) > 0
+      state_ub_violation = (x[:, None] - self.sys.state_limits[:, 1][:, None]) < 0
+
+      w_violation = 5
+      lb_violation = (jax.numpy.sum(x[:, None] - self.sys.state_limits[:, 0][:, None], where=state_lb_violation))**2
+      ub_violation = (jax.numpy.sum(x[:, None] - self.sys.state_limits[:, 1][:, None], where=state_ub_violation))**2
+
+      cost += dt * w_violation * (lb_violation + ub_violation)
       x = self.sys.step(x, input[:, i], dt, "rk4")
 
       t += dt
@@ -999,6 +1007,9 @@ class PredictiveRandomSampling(Controller):
 
     # random_parameters = self.prev_best_control + diff_random_parameters
     random_parameters = diff_random_parameters
+
+    random_parameters = jax.numpy.where(random_parameters < 10, random_parameters, 10)
+    random_parameters = jax.numpy.where(random_parameters > -10, random_parameters, -10)
 
     # control_parameters_vec = best_control_parameters + additional_random_parameters
 
