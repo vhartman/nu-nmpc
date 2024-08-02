@@ -145,9 +145,9 @@ def cartpole_test():
   x = np.zeros(4)
   x[2] = 0
   u = np.zeros(1)
-  dt = 0.025
+  dt = 0.05
 
-  Q = np.diag([1, 0, 3, 0])
+  Q = np.diag([5, 0.1, 50, 0.1])
   ref = np.zeros((4, 1))
   ref[2, 0] = np.pi
 
@@ -157,13 +157,19 @@ def cartpole_test():
 
   nmpc = NMPC(sys, 20, dt, quadratic_cost, ref)
 
-  dts = get_linear_spacing(dt, 40 * dt, 10)
+  # dts = [dt] * 50
+  dts = get_linear_spacing(dt, 25 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
-  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  mppi = MPPI(sys, dts, quadratic_cost, ref, var=np.array([5]), num_rollouts=10000)
 
-  for res in [mpc_sol, nu_mpc_sol]:
+  # mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  mppi_sol = eval(sys, mppi, x, T_sim, dt)
+
+  # for res in [mpc_sol, nu_mpc_sol]:
+  # for res in [mppi_sol]:
+  for res in [nu_mpc_sol, mppi_sol]:
     times = res.times
     states = res.states
     inputs = res.inputs
@@ -271,11 +277,18 @@ def test_masspoint():
   blocks = get_linear_blocking(20, 10)
   mb_mpc = MoveBlockingNMPC(sys, 20, dt, quadratic_cost, ref, blocks)
 
-  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
-  mb_mpc_sol = eval(sys, mb_mpc, x, T_sim, dt)
+  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = [dt] * 10
+  ilqr = PenaltyiLQR(sys, dts, quadratic_cost, ref)
 
-  for res in [mpc_sol, nu_mpc_sol, mb_mpc_sol]:
+  # mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  # nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  # mb_mpc_sol = eval(sys, mb_mpc, x, T_sim, dt)
+  ilqr_sol = eval(sys, ilqr, x, T_sim, dt)
+
+  # for res in [ilqr_sol, nu_mpc_sol]:
+  for res in [ilqr_sol]:
+  # for res in [mpc_sol, nu_mpc_sol, mb_mpc_sol]:
   # for times, states, inputs, computation_times in [mb_mpc_sol]:
   # for times, states, inputs, computation_times in [mpc_sol, nu_mpc_sol]:
     times = res.times
@@ -308,9 +321,10 @@ def test_masspoint():
 
 def squircle(t):
   w = t * 0.8
-  x = abs(np.cos(w)) ** (2/8) * np.sign(np.cos(w))
-  y = abs(np.sin(w)) ** (2/8) * np.sign(np.sin(w))
-  return np.array([x, 0, y, 0]).reshape((-1, 1))
+  x = abs(jnp.cos(w)) ** (2/8) * jnp.sign(jnp.cos(w))
+  y = abs(jnp.sin(w)) ** (2/8) * jnp.sign(jnp.sin(w))
+  # return jnp.asarray([x, 0, y, 0]).reshape((-1, 1))
+  return jnp.asarray([x, y])
 
 def square(t, side_length=1):
   t = (t * 1.0) % 4
@@ -381,7 +395,8 @@ def test_masspoint_ref_path():
   Q = np.diag([10, 0.01, 10, 0.01])
   R = np.diag([.01, .01])
 
-  ref = lambda t: jax.numpy.asarray([figure_eight(t)[0], 0, figure_eight(t)[1], 0]).reshape(-1, 1)
+  ref = lambda t: jax.numpy.asarray([squircle(t)[0], 0, squircle(t)[1], 0]).reshape(-1, 1)
+  # ref = lambda t: jax.numpy.asarray([figure_eight(t)[0], 0, figure_eight(t)[1], 0]).reshape(-1, 1)
   # ref = lambda t: jax.numpy.asarray([square(t)[0], 0, square(t)[1], 0]).reshape(-1, 1)
   x = ref(0).flatten()
 
@@ -399,9 +414,9 @@ def test_masspoint_ref_path():
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
-  # dts = [dt] * 10
+  dts = [dt*2] * 10
   # dts = get_linear_spacing(dt, 5 * dt, 5)
-  dts = get_linear_spacing(dt, 20 * dt, 10)
+  # dts = get_linear_spacing(dt, 20 * dt, 10)
   # dts = get_power_spacing(dt, 20 * dt, 10)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
@@ -452,7 +467,7 @@ def test_masspoint_ref_path():
   plt.show()
 
 def test_jerk_masspoint():
-  T_sim = 3
+  T_sim = 4
   dt = 0.05
 
   sys = JerkMasspointND(2)
@@ -481,18 +496,25 @@ def test_jerk_masspoint():
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
-  dts = get_linear_spacing(dt, 20 * dt, 10)
+  dts = [dt] * 20
+  # dts = [dt] * 10
+  # dts = get_linear_spacing(dt, 20 * dt, 10)
   # dts = get_linear_spacing_v2(dt, 20 * dt, 5)
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
 
-  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  pred_rnd = MPPI(sys, dts, quadratic_cost, ref)
+
+  # mpc_sol = eval(sys, nmpc, x, T_sim, dt)
   nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  rnd_mpc_sol = eval(sys, pred_rnd, x, T_sim, dt)
 
   # for times, states, inputs, computation_times in [mpc_sol]:
-  for res in [mpc_sol, nu_mpc_sol]:
+  # for res in [mpc_sol, nu_mpc_sol]:
+  for res in [rnd_mpc_sol, nu_mpc_sol]:
+  # for res in [rnd_mpc_sol]:
     times = res.times
     states = res.states
     inputs = res.inputs
@@ -2541,8 +2563,8 @@ if __name__ == "__main__":
   # test_racecar()
   # test_racecar_ref_path()
   
-  # test_masspoint()
-  test_masspoint_ref_path()
+  test_masspoint()
+  # test_masspoint_ref_path()
 
   # test_unicycle()
   # test_unicycle_ref_path()

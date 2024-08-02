@@ -10,8 +10,8 @@ class System:
     self.sys_jac = jax.jit(jax.jacfwd(self.f, argnums=0))
     self.input_jac = jax.jit(jax.jacfwd(self.f, argnums=1))
 
-    self.tmp = jax.jit(jax.jacfwd(self.step_rk4, argnums=0))
-    self.tmp_inp = jax.jit(jax.jacfwd(self.step_rk4, argnums=1))
+    self.tmp = jax.jit(jax.jacfwd(self.step_euler, argnums=0))
+    self.tmp_inp = jax.jit(jax.jacfwd(self.step_euler, argnums=1))
 
     self.state_names = []
     self.input_names = []
@@ -82,7 +82,7 @@ class System:
 
     A_disc = self.tmp(x, u, dt)
     B_disc = self.tmp_inp(x, u, dt)
-    K = (A_disc @ x[:, None] + B_disc @ u[:, None] - self.step_rk4(x, u, dt)[:, None])
+    K = (A_disc @ x[:, None] + B_disc @ u[:, None] - self.step_euler(x, u, dt)[:, None])
 
     return A_disc, B_disc, K
 

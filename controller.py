@@ -1062,7 +1062,7 @@ class MPPI(Controller):
       ub_violation = (jax.numpy.sum(x[:, None] - self.sys.state_limits[:, 1][:, None], where=state_ub_violation))**2
 
       cost += dt * w_violation * (lb_violation + ub_violation)
-      x = self.sys.step(x, input[:, i], dt, "rk4")
+      x = self.sys.step(x, input[:, i], dt, "euler")
 
       t += dt
 
@@ -1071,7 +1071,7 @@ class MPPI(Controller):
 
     return cost
 
-  def __init__(self, system, dts, quadratic_cost, reference, var=None, num_rollouts=100000):
+  def __init__(self, system, dts, quadratic_cost, reference, var=None, num_rollouts=10000):
     self.sys = system
     self.N = len(dts)
     self.dts = dts
@@ -1121,15 +1121,12 @@ class MPPI(Controller):
     diff_random_parameters = diff_random_parameters.at[0:self.num_rollouts].set(
       self.var[:, None] * jax.random.normal(key=self.key, shape=(self.num_rollouts, self.input_dim, self.N)))
     diff_random_parameters = diff_random_parameters.at[self.num_rollouts:].set(
-      jax.random.uniform(key=self.key, minval=-2, maxval=2, shape=(self.num_rollouts, self.input_dim, self.N)))
+      jax.random.uniform(key=self.key, minval=-40, maxval=40, shape=(self.num_rollouts, self.input_dim, self.N)))
 
     random_parameters = self.prev_best_control + diff_random_parameters
     # random_parameters = diff_random_parameters
 
-    random_parameters = jax.numpy.where(random_parameters < 10, random_parameters, 10)
-    random_parameters = jax.numpy.where(random_parameters > -10, random_parameters, -10)
-
-    # control_parameters_vec = best_control_parameters + additional_random_parameters
+    random_parameters = jnp.clip(random_parameters, self.sys.input_limits[:, 0][:, None], self.sys.input_limits[:, 1][:, None])
 
     costs = self.jitted_rollout(state, random_parameters, t)
     
@@ -1149,6 +1146,7 @@ class MPPI(Controller):
     weighted_inputs = weights * random_parameters
     best_control_parameters = jnp.sum(weighted_inputs, axis=0)
 
+    print(t)
     print(best_control_parameters)
 
     self.solve_time = 0
@@ -1159,5 +1157,186 @@ class MPPI(Controller):
 
     return best_control_parameters[:, 0]
 
-class iLQR(Controller):
+class PenaltyiLQR(Controller):
+  def __init__(self, system, dts, quadratic_cost, reference):
+    self.sys = system
+    self.N = len(dts)
+    self.dts = dts
+
+    self.cost = quadratic_cost
+
+    if callable(reference):
+      self.ref = reference
+    else:
+      self.ref = lambda t: reference
+
+    self.state_dim = self.sys.state_dim
+    self.input_dim = self.sys.input_dim
+
+    self.prev_u = [np.zeros(self.input_dim)] * len(self.dts)
+    self.prev_x = []
+
+    self.max_iters = 5
+
+    self.linearization = jax.jit(self.sys.linearization)
+
+    self.solve_time = 0
+
+    self.first_run = True
+  
+  def compute_initial_control_guess(self):
+    if self.first_run:
+      pass
+    else:
+      # shift solution by one
+      # self.prev_u = np.hstack((self.prev_u[:, 1:], self.prev_u[:, -1][:, None]))
+
+      times = np.array([0] + list(np.cumsum(self.dts[:-1])))
+
+      print(np.array(self.prev_u).T)
+
+      f = interp1d(times, np.array(self.prev_u).T, axis=1, bounds_error=False, fill_value=self.prev_u[-1])
+      new_u = f(times + self.dts[0])
+
+      for i in range(len(self.dts)):
+        self.prev_u[i] = new_u[:, i]
+      # self.prev_u = new_u
+
+  def fwd_pass(self, xs, us, ks, Ks, alpha = 0.5):
+    # rollout of trajectory with control computed by backward pass
+    xs_new = [xs[0]]
+    us_new = []
+    for i, u in enumerate(us):
+      # print('u', u[:, None])
+      # print('k', ks[i])
+
+      us_new.append(u[:, None] + alpha * ks[i])
+
+    cost = 0
+
+    print('rolling out with control')
+
+    for i in range(len(self.dts)):
+      dt = self.dts[i]
+
+      diff = xs[i] - xs_new[i]
+      us_new[i] += (Ks[i] @ diff[:, None])
+      us_new[i] = us_new[i].flatten()
+
+      xn = self.sys.step(xs_new[i], us_new[i], dt, "euler")
+      xs_new.append(xn)
+
+    print("A")
+
+    return xs_new, us_new, cost
+
+  # def quadratized_penalty(self, x, u):
+  #   def barrier(val, bound, q1=1, q2=1):
+  #     return q1 * jnp.exp(q2 * (val - bound))
+    
+  #   def 
+    
+  #   return Q, q, R, r
+
+  def bwd_pass(self, xs, us):
+    # compute affine control matrix with riccatti equation
+    ks = [None] * len(self.dts)
+    Ks = [None] * len(self.dts)
+
+    sk = jnp.zeros(self.state_dim)[:, None]
+    Sk = self.cost.QN
+
+    for i in range(len(self.dts)):
+      x_idx = len(self.dts) - i - 1
+      u_idx = len(self.dts) - i - 1
+      dt = self.dts[u_idx]
+
+      prev_state = xs[x_idx][:, None]
+      prev_input = us[u_idx][:, None]
+      A, B, F = self.linearization(prev_state.flatten(), prev_input.flatten(), dt)
+
+      print('x prev\n', prev_state)
+      print('u_prev\n', prev_input)
+
+      Q = self.cost.Q # + quadratized barrier
+      R = self.cost.R # + quadratized barrier
+
+      lx = Q @ prev_state
+      lu = R @ prev_input
+
+      print('lx\n', lx)
+      print('lu\n', lu)
+
+      lxx = Q
+      luu = R
+      lux = np.zeros((self.input_dim, self.state_dim))
+
+      Qx = lx + A.T @ sk
+      Qu = lu + B.T @ sk
+      Qxx = lxx + A.T @ Sk @ A
+      Quu = luu + B.T @ Sk @ B
+      Qux = lux + B.T @ Sk @ A
+
+      Quu_inv = jnp.linalg.inv(Quu)
+
+      print('Quu\n', Quu)
+      print('Quu_inv\n', Quu_inv)
+      print('Qu\n', Qu)
+
+      d = -Quu_inv @ Qu
+      K = -Quu_inv @ Qux
+
+      ks[u_idx] = d 
+      Ks[u_idx] = K
+
+      print('d\n', d)
+      print('K\n', K)
+
+      sk = Qx + K.T @ Quu @ d + K.T @ Qu + Qux.T @ d
+      Sk = Qxx + K.T @ Quu @ K  + K.T @ Qux + Qux.T @ K
+
+    return ks, Ks
+
+  def rollout(self, x0, us):
+    xs = [x0]
+    cost = 0
+
+    for i in range(len(self.dts)):
+      dt = self.dts[i]
+      xs.append(self.sys.step(xs[i], us[i], dt, "euler"))
+
+      cost += 0
+
+    return xs, cost
+
+  def compute(self, state, t):
+    # shift solutions
+    self.compute_initial_control_guess()
+
+    us = self.prev_u    
+    xs, cost = self.rollout(state, us)
+
+    for _ in range(self.max_iters):
+      print('backward pass')
+      ks, Ks = self.bwd_pass(xs, us)
+
+      print('fwd pass')
+      xs_new, us_new, cost_new = self.fwd_pass(xs, us, ks, Ks)
+
+      # print(xs_new)
+
+      if cost_new < cost or True:
+        xs = xs_new
+        us = us_new
+
+        # if (abs(cost_new - cost)/cost) < self.converge_thresh:
+          # break
+
+        cost = cost_new
+
+    self.first_run = False
+
+    return us[0]
+
+class ALiLQR(Controller):
   pass
