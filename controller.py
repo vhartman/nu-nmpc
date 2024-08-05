@@ -1181,9 +1181,27 @@ class PenaltyiLQR(Controller):
     self.linearization = jax.jit(self.sys.linearization)
 
     self.solve_time = 0
-
     self.first_run = True
-  
+
+    def barrier(state, inp, q1, q2):
+      sum = 0
+
+      for i in range(self.state_dim):
+        sum += q1 * jnp.exp(q2 * (-state[i] + self.sys.state_limits[i, 0]))
+        sum += q1 * jnp.exp(q2 * (state[i] - self.sys.state_limits[i, 1]))
+
+      for i in range(self.input_dim):
+        sum += q1 * jnp.exp(q2 * (-inp[i] + self.sys.input_limits[i, 0]))
+        sum += q1 * jnp.exp(q2 * (inp[i] - self.sys.input_limits[i, 1]))
+
+      return sum
+    
+    self.bx = jax.jit(jax.jacfwd(barrier, argnums=0))
+    self.bxx = jax.jit(jax.jacfwd(self.bx, argnums=0))
+
+    self.bu = jax.jit(jax.jacfwd(barrier, argnums=1))
+    self.buu = jax.jit(jax.jacfwd(self.bu, argnums=1))
+
   def compute_initial_control_guess(self):
     if self.first_run:
       pass
@@ -1209,6 +1227,10 @@ class PenaltyiLQR(Controller):
     for i, u in enumerate(us):
       # print('u', u[:, None])
       # print('k', ks[i])
+      
+      for k in ks[i]:
+        if np.isnan(k):
+          raise "A"
 
       us_new.append(u[:, None] + alpha * ks[i])
 
@@ -1219,7 +1241,7 @@ class PenaltyiLQR(Controller):
     for i in range(len(self.dts)):
       dt = self.dts[i]
 
-      diff = xs[i] - xs_new[i]
+      diff = xs_new[i] - xs[i]
       us_new[i] += (Ks[i] @ diff[:, None])
       us_new[i] = us_new[i].flatten()
 
@@ -1230,15 +1252,19 @@ class PenaltyiLQR(Controller):
 
     return xs_new, us_new, cost
 
-  # def quadratized_penalty(self, x, u):
-  #   def barrier(val, bound, q1=1, q2=1):
-  #     return q1 * jnp.exp(q2 * (val - bound))
-    
-  #   def 
-    
-  #   return Q, q, R, r
+  def quadratized_penalty(self, x, u, q1=0.1, q2=2):
+    q = self.bx(x, u, q1, q2)
+    Q = self.bxx(x, u, q1, q2)
 
-  def bwd_pass(self, xs, us):
+    r = self.bu(x, u, q1, q2)
+    R = self.buu(x, u, q1, q2)
+    
+    # print('Q\n', Q)
+    # print('q\n', q)
+
+    return Q, q, R, r
+  
+  def bwd_pass(self, xs, us, t0):
     # compute affine control matrix with riccatti equation
     ks = [None] * len(self.dts)
     Ks = [None] * len(self.dts)
@@ -1246,10 +1272,14 @@ class PenaltyiLQR(Controller):
     sk = jnp.zeros(self.state_dim)[:, None]
     Sk = self.cost.QN
 
+    t = t0 + sum(self.dts)
+
     for i in range(len(self.dts)):
       x_idx = len(self.dts) - i - 1
       u_idx = len(self.dts) - i - 1
       dt = self.dts[u_idx]
+
+      t -= dt
 
       prev_state = xs[x_idx][:, None]
       prev_input = us[u_idx][:, None]
@@ -1258,11 +1288,21 @@ class PenaltyiLQR(Controller):
       print('x prev\n', prev_state)
       print('u_prev\n', prev_input)
 
-      Q = self.cost.Q # + quadratized barrier
-      R = self.cost.R # + quadratized barrier
+      bQ, bq, bR, br = self.quadratized_penalty(prev_state.flatten(), prev_input.flatten())
 
-      lx = Q @ prev_state
-      lu = R @ prev_input
+      Q = self.cost.Q + bQ
+      R = self.cost.R + bR
+
+      # print(Q)
+      # print(R)
+
+      # print(bQ)
+      # print(bR)
+
+      lin_ref_tracking = -self.cost.Q @ self.ref(t)
+
+      lx = Q @ prev_state + lin_ref_tracking + bq[:, None]
+      lu = R @ prev_input + br[:, None]
 
       print('lx\n', lx)
       print('lu\n', lu)
@@ -1318,7 +1358,7 @@ class PenaltyiLQR(Controller):
 
     for _ in range(self.max_iters):
       print('backward pass')
-      ks, Ks = self.bwd_pass(xs, us)
+      ks, Ks = self.bwd_pass(xs, us, t)
 
       print('fwd pass')
       xs_new, us_new, cost_new = self.fwd_pass(xs, us, ks, Ks)

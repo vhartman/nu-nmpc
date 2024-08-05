@@ -162,14 +162,20 @@ def cartpole_test():
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
   mppi = MPPI(sys, dts, quadratic_cost, ref, var=np.array([5]), num_rollouts=10000)
-
+  
+  dts = get_linear_spacing(dt, 20 * dt, 20)
+  # dts = [dt] * 10
+  ilqr = PenaltyiLQR(sys, dts, quadratic_cost, ref)
+  
   # mpc_sol = eval(sys, nmpc, x, T_sim, dt)
-  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
-  mppi_sol = eval(sys, mppi, x, T_sim, dt)
+  # nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  # mppi_sol = eval(sys, mppi, x, T_sim, dt)
+  ilqr_sol = eval(sys, ilqr, x, T_sim, dt)
 
   # for res in [mpc_sol, nu_mpc_sol]:
   # for res in [mppi_sol]:
-  for res in [nu_mpc_sol, mppi_sol]:
+  # for res in [nu_mpc_sol, mppi_sol]:
+  for res in [ilqr_sol]:
     times = res.times
     states = res.states
     inputs = res.inputs
@@ -264,6 +270,7 @@ def test_masspoint():
 
   Q = np.diag([1, 0, 1, 0])
   ref = np.zeros((4, 1))
+  ref[0, 0] = 2
   R = np.diag([.1, .1])
 
   quadratic_cost = QuadraticCost(Q, R, Q)
@@ -2563,7 +2570,7 @@ if __name__ == "__main__":
   # test_racecar()
   # test_racecar_ref_path()
   
-  test_masspoint()
+  # test_masspoint()
   # test_masspoint_ref_path()
 
   # test_unicycle()
@@ -2581,7 +2588,7 @@ if __name__ == "__main__":
   # make_dt_curve()
   # make_cost_computation_curve()
 
-  # cartpole_test()
+  cartpole_test()
   # double_cartpole_test()
 
   # mpcc_test()
