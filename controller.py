@@ -463,7 +463,7 @@ class NMPCC(Controller):
     else:
       self.ref = lambda t: reference
 
-    ts = np.linspace(0, 20, 10000)
+    ts = np.linspace(0, 20, 1000)
     pts = [self.ref(t) for t in ts]
     self.path = make_interp_spline(ts, pts)
     self.path_derivative = self.path.derivative(1)
@@ -511,9 +511,6 @@ class NMPCC(Controller):
     self.track_constraints = True
     self.track_constraints_with_slack = True
 
-    self.track_constraint_linear_weight = 1000
-    self.track_constraint_quadratic_weight = 2000
-
     self.move_blocking = False
     self.blocks = None
 
@@ -559,20 +556,19 @@ class NMPCC(Controller):
 
       self.prev_u = new_u
 
-  def project_state_to_progess(self, state, time):
+  def project_state_to_progess(self, state, t):
     if self.first_run:
       return 0
 
-    diff = time - self.prev_t
-    initial_theta_guess = 1. / self.progress_scaling[0] * self.prev_p[0, 0] + \
-        diff * 1. / self.progress_scaling[1] * self.prev_p[1, 0] + \
-        diff ** 2 / 2. * 1. / self.progress_acc_scaling[0] * self.prev_up[0, 0]
+    diff = t - self.prev_t
 
-    if True:
-      # temporary for testing
-      return 1. / self.progress_scaling[0] * self.prev_p[0, 1]
+    if False:
+      return 1. / self.progress_scaling[0] * self.prev_p[0, 0] + \
+        diff * 1. / self.progress_scaling[1] * self.prev_p[1, 0]
 
-      return initial_theta_guess
+    prev_theta = 0
+    if not self.first_run:
+      prev_theta = 1. / self.progress_scaling[0] * self.prev_p[0, 0]
 
     min_error = 1e6
     theta_best = 0
@@ -582,7 +578,7 @@ class NMPCC(Controller):
 
     for t in np.linspace(0, 20, 1000):
       e = self.error(state, t)
-      if abs(t - initial_theta_guess) < max_diff and e < min_error:
+      if abs(t - prev_theta) < max_diff and e < min_error:
       # if e < min_error:
         min_error = e
         theta_best = t
@@ -590,7 +586,7 @@ class NMPCC(Controller):
     return theta_best
 
   def compute_initial_progress_guess(self, state, T, t):
-    theta = self.project_state_to_progess(state, t)
+    theta = self.project_state_to_progess(state,t)
 
     if self.first_run:
       for i in range(self.N+1):
@@ -918,8 +914,8 @@ class NMPCC(Controller):
       if self.track_constraints and self.track_constraints_with_slack:
         for i in range(self.N):
           dt = self.dts[i]
-          cost += dt * self.track_constraint_linear_weight * cp.sum(rs[0, (i+1)])
-          cost += dt * self.track_constraint_quadratic_weight * cp.sum_squares(rs[0, (i+1)])
+          cost += dt * 100 * cp.sum(rs[0, (i+1)])
+          cost += dt * 2000 * cp.sum_squares(rs[0, (i+1)])
 
       objective = cp.Minimize(cost)
 

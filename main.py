@@ -2589,7 +2589,7 @@ def mpcc_amzracecar_test(track='fig8'):
   # dts = [dt] * 10 # does not work
   # dts = [dt * 2] * 20 # 8.15, 18
   # dts = [dt * 2] * 10 # 8.075, 47
-  dts = get_linear_spacing(dt, 40 * dt, 20) # 7.95, 13
+  # dts = get_linear_spacing(dt, 40 * dt, 20) # 7.95, 13
   # dts = get_linear_spacing(dt, 40 * dt, 10) # does not work
   # dts = get_linear_spacing(dt, 30 * dt, 20) # 7.9
   # dts = get_linear_spacing(dt, 40 * dt, 20) # 8.125, 25
@@ -2598,7 +2598,7 @@ def mpcc_amzracecar_test(track='fig8'):
 
   # dts = get_linear_spacing_with_max_dt(40 * dt, dt, 0.2, 10) # fails
   # dts = get_power_spacing(dt, 40 * dt, 20) # 8.05
-  # dts = get_power_spacing(dt, 20 * dt, 10) # 8.075, 22
+  dts = get_power_spacing(dt, 20 * dt, 10) # 8.075, 22
 
   # plt.plot(dts)
   # plt.show()
