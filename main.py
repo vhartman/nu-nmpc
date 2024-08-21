@@ -15,14 +15,18 @@ import matplotlib.animation as animation
 
 from collections import namedtuple
 
-ControllerResult = namedtuple('Result', ['times', 'states', 'inputs', 'solver_time', 'computation_time', 'state_predictions', 'control_predictions'])
+plt.style.use('./blog.mplstyle')
 
-def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
+ControllerResult = namedtuple('Result', ['times', 'states', 'inputs', 'solver_time', 'computation_time', 'state_predictions', 'control_predictions', 'progress'])
+
+def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10, mpcc=False, noise_on_obs=False, noise_on_input=False):
   xn = x0
   t0 = 0.
     
   states = [x0]
   inputs = []
+
+  progress = []
 
   state_pred = []
   control_pred = []
@@ -39,9 +43,23 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     # print(system.step(xn, np.zeros(system.input_dim), dt_sim, method='heun'))
     t = t0 + j * dt_sim
 
+    if np.isnan(xn).any():
+      solve_times[-1] = 1e10
+      break
+
+    if noise_on_obs:
+      xn += (np.random.rand(xn.shape[0]) - 0.5) * 0.1
+
     start = time.process_time_ns()
     u = controller.compute(xn, t)
     end = time.process_time_ns()
+
+    if np.isnan(u).any():
+      solve_times[-1] = 1e10
+      break
+
+    if noise_on_input:
+      u += (np.random.rand(u.shape[0]) - 0.5) * 0.1
 
     # finer simulation
     for i in range(N_sim_iter):
@@ -60,20 +78,23 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10):
     state_pred.append(controller.prev_x)
     control_pred.append(controller.prev_u)
 
-  return ControllerResult(times, states, inputs, solve_times, computation_times_ms, state_pred, control_pred)
+    if mpcc:
+      progress.append(controller.prev_p[0, 0])
+
+  return ControllerResult(times, states, inputs, solve_times, computation_times_ms, state_pred, control_pred, progress)
 
 def double_cartpole_test():
-  T_sim = 5
+  T_sim = 4
 
   sys = DoubleCartpole()
   x = np.zeros(6)
   x[1] = np.pi
   x[2] = 0
   u = np.zeros(1) - 0
-  dt = 0.03
+  dt = 0.025
 
-  Q = np.diag([1, 2, 2, 0.01, 0.01, 0.01])
-  R = np.diag([.05])
+  Q = np.diag([1, 5, 5, 0.01, 0.01, 0.01])
+  R = np.diag([.001])
 
   ref = np.zeros((6, 1))
 
@@ -85,14 +106,14 @@ def double_cartpole_test():
   # nmpc = NMPC(sys, 20, dt) # does not work
   # nmpc = NMPC(sys, 20, dt * 2) # does not work
   # nmpc = NMPC(sys, 30, dt, quadratic_cost, ref) # does work
-  nmpc = NMPC(sys, 15, dt*2, quadratic_cost, ref) # 
+  nmpc = NMPC(sys, 10, 0.1, quadratic_cost, ref) # 
   nmpc.state_scaling = state_scaling
   nmpc.input_scaling = input_scaling
 
   #dts = get_relu_spacing(dt, 30 * dt, 15)
   # dts = get_linear_spacing(dt, 40 * dt, 20) # works
   # dts = get_linear_spacing(dt, 30 * dt, 20) # does not work
-  dts = get_linear_spacing(dt, 30 * dt, 15)
+  dts = get_linear_spacing(dt, 1, 40) # 10 steps: 355
   nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
 
   nu_mpc.nmpc.state_scaling = state_scaling
@@ -117,12 +138,20 @@ def double_cartpole_test():
     plt.figure()
     for i in range(len(times)):
       if i % 1 == 0:
-        rect = patches.Rectangle((states[i][0]-0.05, 0-0.05), width=0.1, height=0.1, edgecolor='r', facecolor='none')
+        xpos = states[i][0]
+
+        rect = patches.Rectangle((xpos-0.05, 0-0.05), width=0.1, height=0.1, edgecolor='r', facecolor='none')
         plt.gca().add_patch(rect)
 
-        xpos = states[i][0]
-        plt.plot([xpos, xpos + np.sin(states[i][1])], [0, np.cos(states[i][1])], color=(0, 0, i / len(times)))
-        plt.plot([xpos + np.sin(states[i][1]), xpos + np.sin(states[i][1]) + np.sin(states[i][1] + states[i][2])], [np.cos(states[i][1]), np.cos(states[i][1]) + np.cos(states[i][1] + states[i][2])], color=(0, 0, i / len(times)))
+        a1 = states[i][1]
+        a2 = states[i][2]
+
+        l1 = 0.25
+        l2 = 0.25
+        
+        x_pts = [xpos, xpos + l1 * np.sin(a1), xpos + l1 * np.sin(a1) + l2 * np.sin(a1 + a2)]
+        y_pts = [0, l1 * np.cos(a1), l1*np.cos(a1) + l2*np.cos(a1 + a2)]
+        plt.plot(x_pts, y_pts, color=(0, 0, i / len(times)))
 
     plt.axis('equal')
 
@@ -163,19 +192,19 @@ def cartpole_test():
 
   mppi = MPPI(sys, dts, quadratic_cost, ref, var=np.array([5]), num_rollouts=10000)
   
-  dts = get_linear_spacing(dt, 20 * dt, 20)
+  dts = get_linear_spacing(dt, 25 * dt, 25)
   # dts = [dt] * 10
   ilqr = PenaltyiLQR(sys, dts, quadratic_cost, ref)
   
   # mpc_sol = eval(sys, nmpc, x, T_sim, dt)
-  # nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
   # mppi_sol = eval(sys, mppi, x, T_sim, dt)
   ilqr_sol = eval(sys, ilqr, x, T_sim, dt)
 
   # for res in [mpc_sol, nu_mpc_sol]:
   # for res in [mppi_sol]:
   # for res in [nu_mpc_sol, mppi_sol]:
-  for res in [ilqr_sol]:
+  for res in [ilqr_sol, nu_mpc_sol]:
     times = res.times
     states = res.states
     inputs = res.inputs
@@ -328,21 +357,21 @@ def test_masspoint():
 
 def squircle(t):
   w = t * 0.8
-  x = abs(jnp.cos(w)) ** (2/8) * jnp.sign(jnp.cos(w))
-  y = abs(jnp.sin(w)) ** (2/8) * jnp.sign(jnp.sin(w))
+  x = abs(jnp.cos(w)) ** (2/12) * jnp.sign(jnp.cos(w))
+  y = abs(jnp.sin(w)) ** (2/12) * jnp.sign(jnp.sin(w))
   # return jnp.asarray([x, 0, y, 0]).reshape((-1, 1))
   return jnp.asarray([x, y])
 
 def square(t, side_length=1):
   t = (t * 1.0) % 4
   half_side = side_length / 2
-  x = jax.numpy.piecewise(t,
+  x = np.piecewise(t,
                 [t < 1, (t >= 1) & (t < 2), (t >= 2) & (t < 3), t >= 3],
                 [lambda t: half_side,
                 lambda t: half_side - side_length * (t - 1),
                 lambda t: -half_side,
                 lambda t: -half_side + side_length * (t - 3)])
-  y = jax.numpy.piecewise(t,
+  y = np.piecewise(t,
                 [t < 1, (t >= 1) & (t < 2), (t >= 2) & (t < 3), t >= 3],
                 [lambda t: -half_side + side_length * t,
                 lambda t: half_side,
@@ -390,6 +419,20 @@ def racetrack(t, track=track_center):
   y = track[1][idx]
 
   return np.array([x, y])
+
+ts_square_track = np.linspace(0, 4, 200)
+square_path = [(square(t,3)[0], square(t,3)[1]) for t in ts_square_track]
+
+def square_track(t):
+  idx = int(200 * t/4.) % 200
+
+  x = square_path[idx][0]
+  y = square_path[idx][1]
+
+  return np.array([x,y])
+
+# plt.plot([square_track(i)[0] for i in np.linspace(0, 4, 100)], [square_track(i)[1] for i in np.linspace(0, 4, 100)], 'o', alpha=0.2)
+# plt.show()
 
 def test_masspoint_ref_path():
   T_sim = 7
@@ -900,8 +943,8 @@ def test_unicycle_ref_path():
 
   Q = np.diag([10, 10, 0])
   R = np.diag([0.001, 0.001])
-  ref = lambda t: np.array([square(t)[0], square(t)[1], 0]).reshape(-1, 1)
-  x = np.array([0.5, -0.5, np.pi/2])
+  ref = lambda t: jnp.asarray([squircle(t*4)[0], squircle(t*4)[1], 0]).reshape(-1, 1)
+  x = np.array([1, 0, np.pi/2])
 
   quadratic_cost = QuadraticCost(Q, R, 0.1 * Q)
 
@@ -970,6 +1013,99 @@ def test_unicycle_ref_path():
 
     plt.figure()
     plt.plot(times[1:], inputs, label=['a', 'delta'])
+
+    plt.figure()
+    plt.plot(computation_times)
+
+    cost = 0
+    for i in range(len(states)-1):
+      diff = (states[i][:, None] - ref(times[i]))
+      u = inputs[i][:, None]
+      cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    print(cost)
+
+  plt.show()
+
+def test_second_order_unicycle_ref_path():
+  T_sim = 2
+  dt = 0.05
+
+  sys = Unicycle2ndOrder()
+  x = np.zeros(5)
+
+  Q = np.diag([100, 100, 0, 0.01, 0.01])
+  R = np.diag([0.00001, 0.00001])
+  ref = lambda t: jnp.asarray([squircle(t*4)[0], squircle(t*4)[1], 0, 0, 0]).reshape(-1, 1)
+  x = np.array([1, 0, np.pi/2, 0, 0])
+
+  quadratic_cost = QuadraticCost(Q, R, 0.1 * Q)
+
+  state_scaling = 1 / (np.array([1, 1, 1, 1, 1]))
+  input_scaling = 1 / (np.array([5, 3]))
+
+  # nmpc = NMPC(sys, 10, dt*2, quadratic_cost, ref)
+  nmpc = NMPC(sys, 20, dt*2, quadratic_cost, ref)
+
+  nmpc.state_scaling = state_scaling
+  nmpc.input_scaling = input_scaling
+
+  dts = get_linear_spacing(dt, 40 * dt, 20)
+  # dts = get_power_spacing(dt, 20*dt, 10)
+
+  # dts = [dt] + [19 * dt / 9 for _ in range(9)]
+  nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+
+  nu_mpc.nmpc.state_scaling = state_scaling
+  nu_mpc.nmpc.input_scaling = input_scaling
+
+  mpc_sol = eval(sys, nmpc, x, T_sim, dt)
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+
+  for res in [mpc_sol, nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
+    x = [states[i][0] for i in range(len(times))]
+    y = [states[i][1] for i in range(len(times))]
+
+    x_ref = [ref(times[i])[0] for i in range(len(times))]
+    y_ref = [ref(times[i])[1] for i in range(len(times))]
+
+    plt.figure()
+    plt.plot(x, y)
+    plt.plot(x_ref, y_ref, '--', color='tab:orange')
+
+    ax = plt.gca()
+
+    triangle = np.array([[0.5, 0], [-0.5, 0], [0, 1]]) * 0.05
+
+    for s in states[::5]:
+      # Create a polygon patch
+      polygon = patches.Polygon(triangle, closed=True, edgecolor='black', fill=True)
+
+      # Add the polygon to the current axis
+      ax.add_patch(polygon)
+
+      # Create a transformation for rotating the polygon
+      angle = (s[2] - np.pi/2) / np.pi * 180  # angle in degrees
+      origin = (0.0, 0.0)  # rotation origin
+      t = (transforms.Affine2D()
+          .rotate_deg_around(origin[0], origin[1], angle)
+          .translate(s[0], s[1]))
+      # Apply the transformation to the polygon
+      polygon.set_transform(t + ax.transData)
+
+    plt.axis("equal")
+
+    plt.figure()
+    plt.plot(times, states, label=['x', 'y', 'omega', 'v', 'delta'])
+    plt.legend()
+
+    plt.figure()
+    plt.plot(times[1:], inputs, label=['a', 'ddelta'])
 
     plt.figure()
     plt.plot(computation_times)
@@ -1679,16 +1815,20 @@ def test_linearization_jerk():
   plt.show()
 
 class Problem:
-  def __init__(self, sys, cost, ref, x0, T):
-    self.T = T
+  def __init__(self, T_sim, dt_sim, sys, x0, cost, ref, state_scaling=None, input_scaling=None):
+    self.T_sim = T_sim
+    self.dt_sim = dt_sim
     self.sys = sys
     
+    self.x0 = x0
+
     self.cost = cost
     self.ref = ref
 
-    self.x0 = x0
+    self.state_scaling = state_scaling
+    self.input_scaling = input_scaling
 
-def make_cost_computation_curve():
+def make_cost_computation_curve(problem, ks, T_pred=1, noise=False):
   # run controllers with given
   #  - initial conditions
   #  - weight matrices
@@ -1737,67 +1877,86 @@ def make_cost_computation_curve():
 
     state_scaling = 1 / np.array([1, 1, 1, 1])
     input_scaling = 1 / np.array([5, 5])
-  else:
-    ks = [5, 7, 10, 12, 15, 20]
 
-    T_sim = 4
-    sys = Cartpole()
-    x = np.zeros(4)
-    x[2] = 0
-    u = np.zeros(1)
-    dt = 0.05
+  T_sim = problem.T_sim
+  sys = problem.sys
+  dt = problem.dt_sim
 
-    Q = np.diag([1, 0, 3, 0])
-    ref = np.zeros((4, 1))
-    ref[2, 0] = np.pi
+  x0 = problem.x0
+  ref = problem.ref
 
-    R = np.diag([.1])
+  quadratic_cost = problem.cost
 
-    state_scaling = 1 / np.array([1, 1, 10, 10])
-    input_scaling = 1 / np.array([50])
+  state_scaling = problem.state_scaling
+  input_scaling = problem.input_scaling
 
-  quadratic_cost = QuadraticCost(Q, R, Q)
+  data = {}
 
-  for T in [1]:
+  for T in [T_pred]:
     for k in ks:
       nmpc = NMPC(sys, k, T / k, quadratic_cost, ref)
       nmpc.state_scaling = state_scaling
       nmpc.input_scaling = input_scaling
 
-      #dts = get_relu_spacing(dt, 30 * dt, 15)
-      dts = get_linear_spacing(dt, T, k)
-      nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+      lin_dts = get_linear_spacing(dt, T, k)
+      nu_mpc_lin = NU_NMPC(sys, lin_dts, quadratic_cost, ref)
 
-      nu_mpc.nmpc.state_scaling = state_scaling
-      nu_mpc.nmpc.input_scaling = input_scaling
+      nu_mpc_lin.nmpc.state_scaling = state_scaling
+      nu_mpc_lin.nmpc.input_scaling = input_scaling
 
-      mpc_sol = eval(sys, nmpc, x, T_sim, dt)
-      nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+      exp_dts = get_power_spacing(dt, T, k)
+      nu_mpc_exp = NU_NMPC(sys, exp_dts, quadratic_cost, ref)
 
-      for j, res in enumerate([mpc_sol, nu_mpc_sol]):
+      nu_mpc_exp.nmpc.state_scaling = state_scaling
+      nu_mpc_exp.nmpc.input_scaling = input_scaling
+
+      solvers = [("NMPC", nmpc), ("NU_MPC_linear", nu_mpc_lin), ("NU_MPC_exp", nu_mpc_exp)]
+
+      for j, (name, solver) in enumerate(solvers):
+        res = eval(sys, solver, x0, T_sim, dt, noise_on_obs=noise, noise_on_input=noise)
+        # mpc_sol = eval(sys, nmpc, x0, T_sim, dt)
+        # nu_mpc_lin_sol = eval(sys, nu_mpc_lin, x, T_sim, dt)
+        # nu_mpc_exp_sol = eval(sys, nu_mpc_exp, x, T_sim, dt)
+
+        # for j, res in enumerate([mpc_sol, nu_mpc_lin_sol, nu_mpc_exp_sol]):
         times = res.times
         states = res.states
         inputs = res.inputs
         computation_times = res.computation_time
+        solve_times = res.solver_time
 
         cost = 0
         for i in range(len(states)-1):
           diff = (states[i][:, None] - ref)
           u = inputs[i][:, None]
-          cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+          cost += dt * (diff.T @ quadratic_cost.Q @ diff + u.T @ quadratic_cost.R @ u)
 
         print(cost)
         print(sum(computation_times))
 
-        if j==0:
-          plt.scatter(sum(computation_times), cost, marker='o', color="tab:blue")
-        else:
-          plt.scatter(sum(computation_times), cost, marker='s', color="tab:orange")
+        solver_data = [sum(computation_times), sum(solve_times), cost[0][0], k, res]
+        data.setdefault(name, []).append(solver_data)
 
-  plt.xlabel("comp time")
-  plt.ylabel("Cost")
+        # if j==0:
+        #   plt.scatter(sum(solve_times), cost, marker='o', color="tab:blue")
+        # elif j==1:
+        #   plt.scatter(sum(solve_times), cost, marker='s', color="tab:orange")
+        # elif j==2:
+        #   plt.scatter(sum(solve_times), cost, marker='s', color="tab:green")
 
-  plt.show()
+  # for solver_name, value in data.items():
+  #   x = [value[i][1] for i in range(len(value))]
+  #   y = [value[i][2] for i in range(len(value))]
+
+  #   plt.plot(x, y, label=solver_name)
+
+  # plt.xlabel("Solver time [ms]")
+  # plt.ylabel("Cost")
+  # plt.legend()
+
+  # plt.show()
+
+  return data
 
 def make_T_curve():
   if False:
@@ -2066,12 +2225,6 @@ def make_dt_curve():
 
   plt.show()
 
-def test_dt_max():
-  dts = get_linear_spacing_with_max_dt(1, 0.01, 0.1, 20)
-
-  plt.plot(dts)
-  plt.show()
-
 def mpcc_debug():
   T_sim = 3
 
@@ -2159,7 +2312,7 @@ def mpcc_test():
   nmpcc.state_scaling = state_scaling
   nmpcc.input_scaling = input_scaling
 
-  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
+  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt, mpcc=True)
 
   for res in [nmpcc_sol]:
     times = res.times
@@ -2193,6 +2346,17 @@ def mpcc_test():
 
     plt.figure()
     plt.plot(computation_times)
+
+    progress = res.progress
+
+    finish = 0
+    for i in range(len(progress)):
+      if progress[i] / nmpcc.progress_scaling[0] > 4:
+        finish = i
+        break
+
+    laptime = finish * dt
+    print(laptime)
 
     # cost = 0
     # for i in range(len(states)-1):
@@ -2382,17 +2546,22 @@ def mpcc_racecar_test():
 
   plt.show()
 
-def mpcc_amzracecar_test():
+def mpcc_amzracecar_test(track='fig8'):
   T_sim = 9
   dt = 0.025
 
   sys = AMZRacecar()
   x = np.zeros(8)
 
-  # ref = lambda t: np.array([figure_eight(t)[0], figure_eight(t)[1]]).reshape(-1, 1)
+  if track == 'fig8':
+    ref = lambda t: np.array([figure_eight(t, 1.2)[0], figure_eight(t, 1.2)[1]]).reshape(-1, 1)
+  else:
+    ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
+  
+  # ref = lambda t: np.array([square_track(t)[0], square_track(t)[1]]).reshape(-1, 1)
+  # ref = lambda t: np.array([squircle(t*4)[0], squircle(t*4)[1]]).reshape(-1, 1)
   # ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
-  ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
-
+  
   state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5, 1, 0.35]))
   input_scaling = 1 / (np.array([5, 3]))
   mapping = np.array([
@@ -2401,19 +2570,35 @@ def mpcc_amzracecar_test():
   ])
 
   x = (mapping.T @ ref(0)).flatten()
-  # x[2] = np.pi/2
-  # x[3] = 0.4
-  x[2] = -np.pi/4
-  # x[3] = 0.4
 
-  # dts = [dt]*40
-  # dts = [dt]*10
-  # dts = get_linear_spacing(dt, 20 * dt, 10)
-  dts = get_linear_spacing(dt, 40 * dt, 20)
+  if track == 'fig8':
+    x[2] = 0.5 * np.pi
+  else:
+    x[2] = -np.pi/4
+
+  if track=='fig8':
+    goal_progress = 2*np.pi
+  else:
+    goal_progress = 4
+
+  # dts = [dt * 4] * 10 # does not work
+  # dts = [dt]*40 # 7.9, 15
+  # dts = [dt]*20 # 8.05, 15
+  # dts = [1/15]*15 # 8.025, 15
+  # dts = [dt]*30 # 7.9
+  # dts = [dt] * 10 # does not work
+  # dts = [dt * 2] * 20 # 8.15, 18
+  # dts = [dt * 2] * 10 # 8.075, 47
+  dts = get_linear_spacing(dt, 40 * dt, 20) # 7.95, 13
+  # dts = get_linear_spacing(dt, 40 * dt, 10) # does not work
+  # dts = get_linear_spacing(dt, 30 * dt, 20) # 7.9
+  # dts = get_linear_spacing(dt, 40 * dt, 20) # 8.125, 25
+  # dts = get_linear_spacing(dt, 40 * dt, 10) # 8.125, 25
   # plt.plot(dts)
 
-  # dts = get_linear_spacing_with_max_dt(30 * dt, dt, 0.2, 10)
-  # dts = get_power_spacing(dt, 20 * dt, 10)
+  # dts = get_linear_spacing_with_max_dt(40 * dt, dt, 0.2, 10) # fails
+  # dts = get_power_spacing(dt, 40 * dt, 20) # 8.05
+  # dts = get_power_spacing(dt, 20 * dt, 10) # 8.075, 22
 
   # plt.plot(dts)
   # plt.show()
@@ -2422,15 +2607,19 @@ def mpcc_amzracecar_test():
   nmpcc.state_scaling = state_scaling
   nmpcc.input_scaling = input_scaling
 
-  nmpcc.contouring_weight = .25
-  nmpcc.cont_weight = .5
-  nmpcc.progress_weight = 2
+  nmpcc.contouring_weight = 0.5
+  nmpcc.cont_weight = 0.25
+  nmpcc.progress_weight = 4
 
   nmpcc.diff_from_center = 0.15
 
-  nmpcc.input_reg = 1e-5
+  if track != 'fig8':
+    nmpcc.track_constraint_linear_weight = 100
+    nmpcc.track_constraint_quadratic_weight = 2000
 
-  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt)
+  nmpcc.input_reg = 1e-3
+
+  nmpcc_sol = eval(sys, nmpcc, x, T_sim, dt, mpcc=True)
 
   for res in [nmpcc_sol]:
     times = res.times
@@ -2451,13 +2640,41 @@ def mpcc_amzracecar_test():
     x_outer = [racetrack(times[i], track_outer)[0] for i in range(len(times))]
     y_outer = [racetrack(times[i], track_outer)[1] for i in range(len(times))]
 
+    progress = res.progress
+
+    finish_idx = 0
+    for i in range(len(progress)):
+      if progress[i] / nmpcc.progress_scaling[0] > goal_progress:
+        finish_idx = i
+        break
+
+    laptime = finish_idx * dt
+    print('laptime', laptime)
+
+    violations = []
+    violation = 0
+    for i in range(len(progress)):
+      scaled_progress = progress[i] / nmpcc.progress_scaling[0]
+      delta = ref(scaled_progress) - np.array([x[i*10], y[i*10]]).reshape(-1, 1)
+      violations.append(np.linalg.norm(delta))
+
+      if np.linalg.norm(delta) > nmpcc.diff_from_center:
+        violation += 1
+
+    print(violation)
+
+    plt.figure()
+    plt.plot(violations)
+
     plt.figure()
     plt.scatter(x, y, marker='.', c=cm.viridis(np.array(v)/max(v)), edgecolor='none')
     plt.plot(x_ref, y_ref, '--', color='tab:orange')
-    
-    plt.plot(x_inner, y_inner, '--', color='black')
-    plt.plot(x_outer, y_outer, '--', color='black')
+
     plt.axis('equal')
+
+    if track != 'fig8':
+      plt.plot(x_inner, y_inner, '--', color='black')
+      plt.plot(x_outer, y_outer, '--', color='black')
 
     ax = plt.gca()
 
@@ -2492,6 +2709,7 @@ def mpcc_amzracecar_test():
     plt.figure('solver time')
     plt.plot(res.solver_time)
 
+    plt.style.use('default')
     fig = plt.figure()
     ax = fig.add_subplot(autoscale_on=False, xlim=(-2, 2), ylim=(-2, 2))
     ax.set_aspect('equal')
@@ -2499,11 +2717,19 @@ def mpcc_amzracecar_test():
     
     ax.plot(x_ref, y_ref, '--', color='tab:orange')
     
-    ax.plot(x_inner, y_inner, '--', color='black')
-    ax.plot(x_outer, y_outer, '--', color='black')
+    if track != 'fig8':
+      ax.plot(x_inner, y_inner, '--', color='black')
+      ax.plot(x_outer, y_outer, '--', color='black')
 
     pred, = ax.plot([], [], '-')
     path, = ax.plot([], [], '--')
+
+    rw = 0.1
+    rh = 0.2
+    rect = patches.Rectangle((-rw/2, -rh/2), rw, rh, fill=None, edgecolor='black', rotation_point='center')
+    ax.add_patch(rect)
+
+    scat = ax.scatter([0], [0])
     
     time_template = 'time = %.1fs'
     time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
@@ -2511,12 +2737,34 @@ def mpcc_amzracecar_test():
     def animate(i):
       x_pred = [res.state_predictions[i][0, j] for j in range((res.state_predictions[i].shape[1]))]
       y_pred = [res.state_predictions[i][1, j] for j in range((res.state_predictions[i].shape[1]))]
+      angle_pred = [res.state_predictions[i][2, j] / state_scaling[2] for j in range((res.state_predictions[i].shape[1]))]
       
       history_x = x[:i]
       history_y = y[:i]
 
       pred.set_data(x_pred, y_pred)
       path.set_data(history_x, history_y)
+
+      ref_pos = ref(progress[i]/ nmpcc.progress_scaling[0])
+      scat.set_offsets(np.array([ref_pos[0][0], ref_pos[1][0]]))
+
+      # rect.set_xy((x_pred[0] - rw/2, y_pred[0]-rh/2))
+      
+      # Rotate the rectangle
+      # rect.angle = angle_pred[0] / (2*np.pi) * 360 - 90.
+      
+      # Update the rectangle's transform to rotate around its center
+      # trans = plt.matplotlib.transforms.Affine2D().rotate_deg_around(x_pred[0]-rw/2., y_pred[0] - rh/2., rect.angle)
+      # rect.set_transform(trans + ax.transData)
+
+      angle = (angle_pred[0] - np.pi/2) / np.pi * 180  # angle in degrees
+      origin = (0.0, 0.0)  # rotation origin
+      t = (transforms.Affine2D()
+          .rotate_deg_around(origin[0], origin[1], angle)
+          .translate(x_pred[0], y_pred[0]))
+      # Apply the transformation to the polygon
+      rect.set_transform(t + ax.transData)
+
       time_text.set_text(time_template % (i*dt))
 
       return pred, path, time_text
@@ -2524,7 +2772,7 @@ def mpcc_amzracecar_test():
     ani = animation.FuncAnimation(
       fig, animate, len(computation_times), interval=dt*1000, blit=True)
 
-    ani.save('animation.gif', writer='pillow', fps=30)
+    ani.save('amzracecar_animation.gif', writer='pillow', fps=30)
 
     # cost = 0
     # for i in range(len(states)-1):
@@ -2536,27 +2784,874 @@ def mpcc_amzracecar_test():
 
   plt.show()
 
-def dts_test():
-  dt = 0.05
-  T = 30 * dt
-  N = 10
+def motivation_horizon():
+  T_sim = 3
+  dt = 0.01
 
-  dts_linear = get_linear_spacing(dt, T, N)
-  dts_power = get_power_spacing(dt, T, N)
-  dts_with_max_dt = get_linear_spacing_with_max_dt(T, dt, 0.2, N)
+  sys = JerkMasspointND(1)
+  x0 = np.zeros(3)
+  x0[0] = 4
+  x0[1] = 0
+  x0[2] = 0
 
-  print('linear', sum(dts_linear))
-  print('power', sum(dts_power))
-  print('linear w/ max', sum(dts_with_max_dt))
+  Q = np.diag([10, 0.01, 0.01])
+  ref = np.zeros((3, 1))
+  R = np.diag([.001])
 
-  plt.plot(dts_with_max_dt)
-  plt.plot(dts_linear)
-  plt.plot(dts_power)
+  quadratic_cost = QuadraticCost(Q, R, Q)
+
+  for N_steps in [5, 10, 20, 40, 60]:
+    nmpc = NMPC(sys, N_steps, dt, quadratic_cost, ref)
+    nmpc.sqp_iters = 1
+    nmpc.sqp_mixing = 1
+
+    state_scaling = 1 / np.array([1, 1, 1])
+    input_scaling = 1 / np.array([20])
+
+    nmpc.state_scaling = state_scaling
+    nmpc.input_scaling = input_scaling
+
+    mpc_sol = eval(sys, nmpc, x0, T_sim, dt)
+
+    for res in [mpc_sol]:
+      times = res.times
+      states = res.states
+      inputs = res.inputs
+      computation_times = res.computation_time
+
+      x = [states[i][0] for i in range(len(times))]
+      v = [states[i][1] for i in range(len(times))]
+      a = [states[i][2] for i in range(len(times))]
+      u = [inputs[i][0] for i in range(len(times)-1)]
+
+      plt.figure(f"N={N_steps}")
+      plt.plot(times, x)
+      plt.plot(times, v)
+      plt.plot(times, a)
+
+      plt.plot(times, [sys.state_limits[0, 0]]*len(times), '--', c='tab:blue')
+      plt.plot(times, [sys.state_limits[1, 0]]*len(times), '--', c='tab:orange')
+      plt.plot(times, [sys.state_limits[2, 0]]*len(times), '--', c='tab:green')
+
+      plt.plot(times, [sys.state_limits[0, 1]]*len(times), '--', c='tab:blue')
+      plt.plot(times, [sys.state_limits[1, 1]]*len(times), '--', c='tab:orange')
+      plt.plot(times, [sys.state_limits[2, 1]]*len(times), '--', c='tab:green')
+
+      plt.title(f"T_p={N_steps*dt}")
+      plt.xlabel('T')
+
+      plt.savefig(f'./img/blog/lin_sys_n_{N_steps}.png', format='png', dpi=300, bbox_inches = 'tight')
+
+      plt.figure(f"input for N={N_steps}")
+      plt.plot(times[:-1], u)
+
+      plt.title(f"T_p={N_steps*dt}")
+      plt.xlabel('T')
+
+      plt.savefig(f'./img/blog/input_lin_sys_n_{N_steps}.png', format='png', dpi=300, bbox_inches = 'tight')
 
   plt.show()
 
+def motivation_discretization():
+  T_sim = 3
+  dt_sim = 0.02
+
+  sys = JerkMasspointND(1)
+  x0 = np.zeros(3)
+  x0[0] = 4
+  x0[1] = 0
+  x0[2] = 0
+
+  Q = np.diag([10, 0.01, 0.01])
+  ref = np.zeros((3, 1))
+  R = np.diag([0.00001])
+
+  quadratic_cost = QuadraticCost(Q, R, Q)
+
+  discretizations = [5, 10, 20, 30, 40]
+  # discretizations = [5, 10, 15]
+  costs = []
+  comp_times = []
+
+  T_pred = 40 * dt_sim
+
+  for N_disc in discretizations:
+    dt_disc = T_pred / N_disc
+
+    nmpc = NMPC(sys, N_disc, dt_disc, quadratic_cost, ref)
+    nmpc.sqp_iters = 1
+    nmpc.sqp_mixing = 1
+
+    state_scaling = 1 / np.array([1, 1, 1])
+    input_scaling = 1 / np.array([20])
+
+    nmpc.state_scaling = state_scaling
+    nmpc.input_scaling = input_scaling
+
+    mpc_sol = eval(sys, nmpc, x0, T_sim, dt_sim)
+
+    for res in [mpc_sol]:
+      times = res.times
+      states = res.states
+      inputs = res.inputs
+      computation_times = res.computation_time
+      solve_times = res.solver_time
+
+      # comp_times.append(sum(computation_times))
+      comp_times.append(sum(solve_times) * 1000)
+
+      cost = 0
+      for i in range(len(states)-1):
+        diff = (states[i][:, None] - ref)
+        u = inputs[i][:, None]
+        cost += dt_sim * (diff.T @ Q @ diff + u.T @ R @ u)
+
+      costs.append(cost[0])
+
+      x = [states[i][0] for i in range(len(times))]
+      v = [states[i][1] for i in range(len(times))]
+      a = [states[i][2] for i in range(len(times))]
+      u = [inputs[i][0] for i in range(len(times)-1)]
+
+      plt.figure(f"dt={dt_disc}")
+      plt.plot(times, x)
+      plt.plot(times, v)
+      plt.plot(times, a)
+
+      plt.plot(times, [sys.state_limits[0, 0]]*len(times), '--', c='tab:blue')
+      plt.plot(times, [sys.state_limits[1, 0]]*len(times), '--', c='tab:orange')
+      plt.plot(times, [sys.state_limits[2, 0]]*len(times), '--', c='tab:green')
+
+      plt.plot(times, [sys.state_limits[0, 1]]*len(times), '--', c='tab:blue')
+      plt.plot(times, [sys.state_limits[1, 1]]*len(times), '--', c='tab:orange')
+      plt.plot(times, [sys.state_limits[2, 1]]*len(times), '--', c='tab:green')
+
+      print(cost)
+
+  plt.figure("Costs")
+  plt.plot(discretizations, costs)
+  plt.xlabel("N")
+  plt.ylabel("Cost")
+
+  plt.savefig(f'./img/blog/lin_sys_cost.png', format='png', dpi=300, bbox_inches = 'tight')
+
+  plt.figure("Computation times")
+  plt.plot(discretizations, np.array(comp_times))
+  plt.xlabel("N")
+  plt.ylabel("Solver time [ms]")
+
+  plt.savefig(f'./img/blog/lin_sys_comp_time.png', format='png', dpi=300, bbox_inches = 'tight')
+
+  plt.show()
+
+def make_cart_pole_animation():
+  plt.style.use('default')
+
+  T_sim = 4
+  sys = Cartpole()
+  x = np.zeros(4)
+  x[2] = 0
+  u = np.zeros(1)
+  dt = 0.05
+
+  Q = np.diag([5, 0.1, 50, 0.1])
+  ref = np.zeros((4, 1))
+  ref[2, 0] = np.pi
+
+  R = np.diag([.001])
+
+  quadratic_cost = QuadraticCost(Q, R, Q)
+
+  dts = get_linear_spacing(0.05, 1, 5)
+  nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+  
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+
+  for res in [nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
+    plt.figure()
+    plt.plot([i[0] for i in inputs])
+
+    fig = plt.figure()
+    ax = fig.add_subplot(autoscale_on=False, xlim=(-1.2, 1.2), ylim=(-1.2, 1.2))
+    ax.set_aspect('equal')
+    ax.grid()
+    
+    line, = ax.plot([], [], '-')
+
+    rw = 0.1
+    rh = 0.1
+    rect = patches.Rectangle((-rw/2, -rh/2), rw, rh, fill=None, edgecolor='black', rotation_point='center')
+    ax.add_patch(rect)
+    
+    time_template = 'time = %.1fs'
+    time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
+
+    def animate(i):
+      x = states[i][0]
+      angle = states[i][2]
+
+      x_line = [x, x + 0.5 * np.sin(angle)]
+      y_line = [0, -0.5 * np.cos(angle)]
+
+      line.set_data(x_line, y_line)
+
+      t = (transforms.Affine2D()
+          .translate(x, 0))
+      # Apply the transformation to the polygon
+      rect.set_transform(t + ax.transData)
+
+      time_text.set_text(time_template % (times[i]))
+
+      return line, time_text
+    
+    cost = 0
+    for i in range(len(states)-1):
+      diff = (states[i][:, None] - ref)
+      u = inputs[i][:, None]
+      cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    print(cost)
+    
+    ani = animation.FuncAnimation(
+      fig, animate, np.arange(0, len(states), 4), interval=dt*1000/10*4, blit=True)
+
+    ani.save('cartpole_anim.gif', writer='pillow', fps=1./(dt/10.)/4)
+
+  plt.show()
+
+def make_double_cart_pole_animation():
+  plt.style.use('default')
+
+  T_sim = 4
+
+  sys = DoubleCartpole()
+  x0 = np.zeros(6)
+  x0[1] = np.pi
+  x0[2] = 0
+  dt = 0.025
+
+  Q = np.diag([1, 2, 2, 0.1, 0.1, 0.1])
+  R = np.diag([.001])
+
+  # Q = np.diag([1, 4, 4, 0.01, 0.01, 0.01])
+  # R = np.diag([.05])
+
+  ref = np.zeros((6, 1))
+
+  state_scaling = 1 / (np.array([2, 5, 2, 10, 10, 10]))
+  input_scaling = 1 / (np.array([50]))
+  
+  quadratic_cost = QuadraticCost(Q, R, Q)
+
+  dts = get_linear_spacing(0.025, 1, 20)
+  # dts = [0.05] * 20 # 205
+  nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+  
+  nu_mpc.state_scaling = state_scaling
+  nu_mpc.input_scaling = input_scaling
+
+  nu_mpc_sol = eval(sys, nu_mpc, x0, T_sim, dt)
+
+  for res in [nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+  
+    plt.figure()
+    plt.plot([i[0] for i in inputs])
+
+    fig = plt.figure()
+    ax = fig.add_subplot(autoscale_on=False, xlim=(-2, 2), ylim=(-1.2, 1.2))
+    ax.set_aspect('equal')
+    ax.grid()
+    
+    line, = ax.plot([], [], '-')
+
+    rw = 0.1
+    rh = 0.1
+    rect = patches.Rectangle((-rw/2, -rh/2), rw, rh, fill=None, edgecolor='black', rotation_point='center')
+    ax.add_patch(rect)
+    
+    time_template = 'time = %.1fs'
+    time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
+
+    def animate(i):
+      xpos = states[i][0]
+
+      a1 = states[i][1]
+      a2 = states[i][2]
+
+      l1 = 0.5
+      l2 = 0.5
+      
+      x_pts = [xpos, xpos + l1 * np.sin(a1), xpos + l1 * np.sin(a1) + l2 * np.sin(a1 + a2)]
+      y_pts = [0, l1 * np.cos(a1), l1*np.cos(a1) + l2*np.cos(a1 + a2)]
+
+      line.set_data(x_pts, y_pts)
+
+      t = (transforms.Affine2D()
+          .translate(xpos, 0))
+      # Apply the transformation to the polygon
+      rect.set_transform(t + ax.transData)
+
+      time_text.set_text(time_template % (times[i]))
+
+      return line, time_text
+    
+    cost = 0
+    for i in range(len(states)-1):
+      diff = (states[i][:, None] - ref)
+      u = inputs[i][:, None]
+      cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    print(cost)
+    
+    ani = animation.FuncAnimation(
+      fig, animate, np.arange(0, len(states), 4), interval=dt*1000/10, blit=True)
+
+    ani.save('double_cartpole_anim.gif', writer='pillow', fps=1./(dt/10.)/4)
+
+  plt.show()
+
+def make_quadcopter_animation():
+  plt.style.use('default')
+
+  T_sim = 3
+
+  sys = Quadcopter2D()
+
+  Q = np.diag([10, 10, 50, 0.01, 0.01, 0.01])
+  ref = np.zeros((6, 1))
+  R = np.diag([0.001, 0.001])
+
+  x = np.zeros(6)
+  x[0] = 2
+  x[1] = 1
+  x[2] = np.pi
+  x[3] = -2
+  x[4] = 4
+
+  dt = 0.05
+
+  quadratic_cost = QuadraticCost(Q, R, Q)
+
+  state_scaling = 1 / np.array([1., 1, 1, 5, 5, 10])
+  input_scaling = 1 / np.array([2, 2])
+
+  dts = get_linear_spacing(0.05, 1, 10)
+  # N = 10
+  # dts = [1/N] * N
+  nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+
+  nu_mpc.nmpc.state_scaling = state_scaling
+  nu_mpc.nmpc.input_scaling = input_scaling
+
+  nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
+
+  for res in [nu_mpc_sol]:
+    times = res.times
+    states = res.states
+    inputs = res.inputs
+    computation_times = res.computation_time
+
+    fig = plt.figure()
+    ax = fig.add_subplot(autoscale_on=False, xlim=(-0.5, 2.5), ylim=(-1, 2))
+    ax.set_aspect('equal')
+    ax.grid()
+    
+    line, = ax.plot([], [], '-')
+    scat = ax.scatter([0], [0])
+
+    time_template = 'time = %.1fs'
+    time_text = ax.text(0.05, 0.9, '', transform=ax.transAxes)
+
+    l = 0.2
+    def animate(i):
+      xpos = states[i][0]
+      ypos = states[i][1]
+      angle = states[i][2]
+        
+      x_line = [xpos - l*np.cos(angle), xpos + l*np.cos(angle)]
+      y_line = [ypos - l*np.sin(angle), ypos + l*np.sin(angle)]
+      line.set_data(x_line, y_line)
+
+      scat.set_offsets(np.array([xpos, ypos + 0.05*np.cos(states[i][2])]))
+
+      time_text.set_text(time_template % (times[i]))
+
+      return line, time_text
+    
+    cost = 0
+    for i in range(len(states)-1):
+      diff = (states[i][:, None] - ref)
+      u = inputs[i][:, None]
+      cost += dt * (diff.T @ Q @ diff + u.T @ R @ u)
+
+    print(cost)
+
+    ani = animation.FuncAnimation(
+      fig, animate, np.arange(0, len(states), 4), interval=dt*1000/10*4, blit=True)
+
+    ani.save('quadcopter_animation.gif', writer='pillow', fps=1./(dt/10.)/4)
+
+  
+  plt.show()
+
+def make_racecar_animation():
+  pass
+
+
+solver_to_color_map = {
+  "NMPC": "tab:blue",
+  "NU_MPC_linear": "tab:orange",
+  "NU_MPC_exp": "tab:green",
+}
+
+all_solvers = [
+  "NMPC",
+  "NU_MPC_linear",
+  "NU_MPC_exp"
+]
+
+def make_masspoint_cost_comp_for_blog(num_runs=1):
+  T_sim = 3
+  dt_sim = 0.02
+
+  sys = JerkMasspointND(1)
+  x0 = np.zeros(3)
+  x0[0] = 4
+  x0[1] = 0
+  x0[2] = 0
+
+  Q = np.diag([10, 0.01, 0.01])
+  ref = np.zeros((3, 1))
+  R = np.diag([.001])
+
+  state_scaling = 1 / np.array([1, 1, 1])
+  input_scaling = 1 / np.array([20])
+
+  p = Problem(T_sim, dt_sim, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
+
+  all_data = []
+  for _ in range(num_runs):
+    data = make_cost_computation_curve(p, ks = [5, 7, 10, 20, 30, 40], T_pred= 40 * dt_sim, noise=False)
+    all_data.append(data)
+
+  plt.figure()
+  for solver_name in all_solvers:
+    times = []
+    costs = []
+
+    for data in all_data:
+      value = data[solver_name]
+      x = [value[i][1] for i in range(len(value))]
+      y = [value[i][2] for i in range(len(value))]
+      
+      times.append(x)
+      costs.append(y)
+
+    median_times = np.median(times, axis=0)
+    median_costs = np.median(costs, axis=0)
+
+    plt.errorbar(median_times, median_costs,
+                 xerr=[median_times - np.min(times, axis=0), np.max(times, axis=0) - median_times], 
+                 label=solver_name, color=solver_to_color_map[solver_name],
+                 marker='o')
+
+  plt.xlabel("Solver time [s]")
+  plt.ylabel("Cost")
+  plt.legend()
+
+  plt.savefig(f'./img/blog/masspoint_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
+
+  plt.figure()
+  for solver_name, value in data.items():
+    x = [value[i][1] for i in range(len(value))]
+    y = [value[i][2] for i in range(len(value))]
+
+    ks = [value[i][3] for i in range(len(value))]
+
+    plt.plot(ks, x, label=solver_name)
+
+  plt.savefig(f'./img/blog/masspoint_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
+
+def make_cartpole_cost_comp_for_blog(num_runs=1):
+  T_sim = 4
+  sys = Cartpole()
+  x0 = np.zeros(4)
+  x0[2] = 0
+  dt = 0.05
+
+  Q = np.diag([5, 0.1, 50, 0.1])
+  ref = np.zeros((4, 1))
+  ref[2, 0] = np.pi
+
+  R = np.diag([.001])
+
+  state_scaling = 1 / np.array([1, 1, 1, 1])
+  input_scaling = 1 / np.array([1])
+
+  p = Problem(T_sim, dt, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
+
+  all_data = []
+  for _ in range(num_runs):
+    data = make_cost_computation_curve(p, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
+    # data = make_cost_computation_curve(p, ks = [3, 5, 7, 10, 12, 15, 20], T_pred=1)
+    all_data.append(data)
+
+  plt.figure()
+  for solver_name in all_solvers:
+    times = []
+    costs = []
+
+    for data in all_data:
+      value = data[solver_name]
+      x = [value[i][1] for i in range(len(value))]
+      y = np.array([value[i][2] for i in range(len(value))])
+
+      mask = np.array([-np.cos(value[i][4].states[-1][2]) > 0.8 and \
+                       abs(value[i][4].states[-1][3]) < 0.5 and \
+                       abs(value[i][4].states[-1][0]) < 1 for i in range(len(value))])
+      y[~mask] = np.nan
+
+      times.append(x)
+      costs.append(y)
+
+    median_times = np.median(times, axis=0)
+    median_costs = np.median(costs, axis=0)
+
+    plt.errorbar(median_times, median_costs,
+                 xerr=[median_times - np.min(times, axis=0), np.max(times, axis=0) - median_times], 
+                 label=solver_name, color=solver_to_color_map[solver_name],
+                 marker='o')
+
+  plt.xlabel("Solver time [s]")
+  plt.ylabel("Cost")
+  plt.legend()
+
+  plt.savefig(f'./img/blog/cartpole_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
+
+  plt.figure()
+  for solver_name, value in data.items():
+    x = [value[i][1] for i in range(len(value))]
+    y = [value[i][2] for i in range(len(value))]
+
+    ks = [value[i][3] for i in range(len(value))]
+
+    plt.plot(ks, x, label=solver_name)
+
+  plt.savefig(f'./img/blog/cartpole_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
+
+def make_double_cartpole_cost_comp_for_blog():
+  T_sim = 4
+
+  sys = DoubleCartpole()
+  x0 = np.zeros(6)
+  x0[1] = np.pi
+  x0[2] = 0
+  dt = 0.025
+
+  Q = np.diag([1, 2, 2, 0.1, 0.1, 0.1])
+  R = np.diag([.001])
+
+  # Q = np.diag([1, 5, 5, 0.01, 0.01, 0.01])
+  # R = np.diag([.001])
+
+  # Q = np.diag([1, 4, 4, 0.01, 0.01, 0.01])
+  # R = np.diag([.05])
+
+  ref = np.zeros((6, 1))
+
+  state_scaling = 1 / (np.array([2, 5, 2, 10, 10, 10]))
+  input_scaling = 1 / (np.array([50]))
+  
+  p = Problem(T_sim, dt, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
+  data = make_cost_computation_curve(p, ks = [10, 20, 40], T_pred=1)
+  # make_cost_computation_curve(p, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
+
+  for solver_name, value in data.items():
+    x = [value[i][1] for i in range(len(value))]
+    y = [value[i][2] for i in range(len(value))]
+
+    ks = [value[i][3] for i in range(len(value))]
+
+    x_sorted = np.array([x for _, x in sorted(zip(ks, x))])
+    y_sorted = np.array([x for _, x in sorted(zip(ks, y))])
+
+    mask = x_sorted < 1e5
+
+    plt.plot(x_sorted[mask], y_sorted[mask], label=solver_name)
+
+  plt.xlabel("Solver time [ms]")
+  plt.ylabel("Cost")
+  plt.legend()
+
+  plt.savefig(f'./img/blog/double_cartpole_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
+
+  plt.figure()
+  for solver_name, value in data.items():
+    x = [value[i][1] for i in range(len(value))]
+    y = [value[i][2] for i in range(len(value))]
+
+    ks = [value[i][3] for i in range(len(value))]
+
+    x_sorted = [x for _, x in sorted(zip(ks, x))]
+    y_sorted = [x for _, x in sorted(zip(ks, y))]
+
+    plt.plot(ks, x, label=solver_name)
+
+  plt.savefig(f'./img/blog/double_cartpole_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
+
+def make_quadcopter_cost_comp_for_blog(num_runs=1):
+  T_sim = 3
+
+  sys = Quadcopter2D()
+
+  # Q = np.diag([1, 1, 1, 0.01, 0.01, 0.01])
+  # ref = np.zeros((6, 1))
+  # R = np.diag([.0001, .0001])
+  
+  Q = np.diag([10, 10, 50, 0.01, 0.01, 0.01])
+  ref = np.zeros((6, 1))
+  R = np.diag([0.0001, 0.0001])
+
+  # x0 = np.zeros(6)
+  # x0[0] = 1
+  # x0[1] = 1
+  # x0[2] = 0
+  # x0[3] = 2
+  # x0[4] = 4
+
+  x0 = np.zeros(6)
+  x0[0] = 2
+  x0[1] = 1
+  x0[2] = np.pi
+  x0[3] = -2
+  x0[4] = 4
+
+  dt = 0.05
+
+  state_scaling = 1 / np.array([1., 1, 1, 10, 10, 10])
+  input_scaling = 1 / np.array([2, 2])
+  
+  p = Problem(T_sim, dt, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
+
+  all_data = []
+  for _ in range(num_runs):
+    # data = make_cost_computation_curve(p, ks = [5, 10, 20], T_pred=1)
+    data = make_cost_computation_curve(p, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
+    all_data.append(data)
+
+  plt.figure()
+  for solver_name in all_solvers:
+    times = []
+    costs = []
+
+    for data in all_data:
+      value = data[solver_name]
+      x = [value[i][1] for i in range(len(value))]
+      y = [value[i][2] for i in range(len(value))]
+      
+      times.append(x)
+      costs.append(y)
+
+    median_times = np.median(times, axis=0)
+    median_costs = np.median(costs, axis=0)
+
+    plt.errorbar(median_times, median_costs,
+                 xerr=[median_times - np.min(times, axis=0), 
+                       np.max(times, axis=0) - median_times], 
+                 label=solver_name, color=solver_to_color_map[solver_name],
+                 marker='o')
+
+  plt.xlabel("Solver time [s]")
+  plt.ylabel("Cost")
+  plt.legend()
+
+  plt.savefig(f'./img/blog/quadcopter_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
+
+  plt.figure()
+  for solver_name, value in data.items():
+    x = [value[i][1] for i in range(len(value))]
+    y = [value[i][2] for i in range(len(value))]
+
+    ks = [value[i][3] for i in range(len(value))]
+
+    plt.plot(ks, x, label=solver_name)
+
+  plt.savefig(f'./img/blog/quadcopter_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
+
+def make_racecar_analysis(num_runs=1, track='fig8'):
+  Ns = [5, 10, 20, 40]
+
+  if track=='fig8':
+    T_sim = 5
+    Ns = [10, 15, 20, 30, 40]
+  else:
+    T_sim = 9
+
+  dt_sim = 0.025
+
+  T_pred = 1.
+  dt_disc = 0.025
+
+  # ref = lambda t: np.array([figure_eight(t)[0], figure_eight(t)[1]]).reshape(-1, 1)
+  # ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
+  if track=='fig8':
+    ref = lambda t: np.array([figure_eight(t, 1.2)[0], figure_eight(t, 1.2)[1]]).reshape(-1, 1)
+  else:
+    ref = lambda t: np.array([racetrack(t)[0], racetrack(t)[1]]).reshape(-1, 1)
+
+  mapping = np.array([
+    [1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0],
+  ])
+
+  x0 = (mapping.T @ ref(0)).flatten()
+  if track=='fig8':
+    x0[2] = 0.5 * np.pi # fig 8
+  else:
+    x0[2] = -np.pi/4 # racetrack
+
+  if track=='fig8':
+    goal_progress = 2*np.pi
+  else:
+    goal_progress = 4
+
+  for name in ['NMPC', 'NU_MPC_linear']:
+  # for name in ['NMPC']:
+    all_violations_all_runs = []
+    all_laptimes_all_runs = []
+    all_solvetimes_all_runs = []
+    
+    for _ in range(num_runs):
+      all_violations = []
+      all_laptimes = []
+      all_solvetimes = []
+
+      for N in Ns:
+        if name == 'NMPC':
+          dts = [T_pred / N] * N
+        else:
+          dts = get_linear_spacing(dt_disc, T_pred, N)
+
+        sys = AMZRacecar()
+
+        state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5, 1, 0.35]))
+        input_scaling = 1 / (np.array([5, 3]))
+
+        nmpcc = NMPCC(sys, dts, mapping, ref)
+        nmpcc.state_scaling = state_scaling
+        nmpcc.input_scaling = input_scaling
+
+        nmpcc.contouring_weight = 0.5
+        nmpcc.cont_weight = 0.25
+        nmpcc.progress_weight = 4
+
+        nmpcc.diff_from_center = 0.15
+
+        nmpcc.input_reg = 1e-3
+
+        nmpcc_sol = eval(sys, nmpcc, x0, T_sim, dt_sim, mpcc=True)
+        for res in [nmpcc_sol]:
+          times = res.times
+          states = res.states
+          inputs = res.inputs
+          computation_times = res.computation_time
+          solve_times = res.solver_time
+
+          x = [states[i][0] for i in range(len(times))]
+          y = [states[i][1] for i in range(len(times))]
+
+          progress = res.progress
+
+          finish_idx = 0
+          for i in range(len(progress)):
+            if progress[i] / nmpcc.progress_scaling[0] > goal_progress:
+              finish_idx = i
+              break
+
+          laptime = finish_idx * dt_disc
+          print('laptime', laptime)
+
+          violations = []
+          violation = 0
+          for i in range(len(progress)):
+            scaled_progress = progress[i] / nmpcc.progress_scaling[0]
+            delta = ref(scaled_progress) - np.array([x[i*10], y[i*10]]).reshape(-1, 1)
+            violations.append(np.linalg.norm(delta))
+
+            if np.linalg.norm(delta) > nmpcc.diff_from_center:
+              violation += 1
+
+          print(violation)
+
+          all_laptimes.append(laptime)
+          all_violations.append(violation)
+
+          all_solvetimes.append(np.sum(solve_times))
+
+      all_laptimes = np.array(all_laptimes)
+      mask = all_laptimes < 2
+      all_laptimes[mask] = np.nan
+
+      all_laptimes_all_runs.append(all_laptimes)
+      all_violations_all_runs.append(all_violations)
+      all_solvetimes_all_runs.append(all_solvetimes)
+
+    median_solve_times = np.median(all_solvetimes_all_runs, axis=0)
+    median_laptimes = np.median(all_laptimes_all_runs, axis=0)
+    median_violations = np.median(all_violations_all_runs, axis=0)
+
+    plt.figure('laptimes')
+    plt.errorbar(median_solve_times, median_laptimes,
+                 xerr=[median_solve_times - np.min(all_solvetimes_all_runs, axis=0), np.max(all_solvetimes_all_runs, axis=0) - median_solve_times], 
+                 label=name, color=solver_to_color_map[name],
+                 marker='o')
+    # plt.plot(median_solve_times, all_laptimes, label=name)
+
+    plt.figure('violations')
+    plt.errorbar(median_solve_times, median_violations,
+                 xerr=[median_solve_times - np.min(all_solvetimes_all_runs, axis=0), np.max(all_solvetimes_all_runs, axis=0) - median_solve_times], 
+                 label=name, color=solver_to_color_map[name],
+                 marker='o')
+    # plt.plot(median_solve_times, all_violations, label=name)
+
+  plt.figure('laptimes')
+  plt.xlabel('Solve time [s]')
+  plt.ylabel('Laptime [s]')
+  plt.legend()
+
+  plt.savefig(f'./img/blog/amzracecar_laptimes_comp_{track}.png', format='png', dpi=300, bbox_inches = 'tight')
+  
+  plt.figure('violations')
+  plt.xlabel('Solve time [s]')
+  plt.ylabel('Track violation')
+  plt.legend()
+
+  plt.savefig(f'./img/blog/amzracecar_violations_comp_{track}.png', format='png', dpi=300, bbox_inches = 'tight')
+
 if __name__ == "__main__":
-  # test_dt_max()
+  # motivation_horizon()
+  # motivation_discretization()
+
+  # make_cart_pole_animation()
+  # make_quadcopter_animation()
+  # make_double_cart_pole_animation()
+
+  # make_masspoint_cost_comp_for_blog(num_runs=5)
+  # make_quadcopter_cost_comp_for_blog(num_runs=5)
+  # make_cartpole_cost_comp_for_blog(num_runs=5)
+  # make_racecar_analysis(num_runs=5, track='fig8')
+  # make_racecar_analysis(num_runs=1, track='race')
+
+  # make_double_cartpole_cost_comp_for_blog()
 
   # test_quadcopter()
   # test_quadcopter_ref_path()
@@ -2575,6 +3670,7 @@ if __name__ == "__main__":
 
   # test_unicycle()
   # test_unicycle_ref_path()
+  # test_second_order_unicycle_ref_path()
 
   # test_jerk_masspoint()
   # test_jerk_masspoint_ref_path()
@@ -2588,20 +3684,12 @@ if __name__ == "__main__":
   # make_dt_curve()
   # make_cost_computation_curve()
 
-  cartpole_test()
+  # cartpole_test()
   # double_cartpole_test()
 
   # mpcc_test()
   # mpcc_jerk_test()
   # mpcc_racecar_test()
-  # mpcc_amzracecar_test()
+  mpcc_amzracecar_test(track='race')
 
-  # ts = np.linspace(0, 4, 100)
-  # x = [racetrack(t)[0] for t in ts]
-  # y = [racetrack(t)[1] for t in ts]
-
-  # plt.plot(x, y, 'o-')
-  # plt.axis('equal')
-  # plt.show()
-
-  # dts_test()
+  plt.show()

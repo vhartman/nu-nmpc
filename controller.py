@@ -66,7 +66,9 @@ class NMPC(Controller):
     self.move_blocking = False
     self.blocks = None
 
-  def compute_initial_state_guess(self, x):
+    self.prev_t = 0
+
+  def compute_initial_state_guess(self, x, t):
     if self.first_run:
       for i in range(self.N+1):
         self.prev_x.append(x)
@@ -79,8 +81,10 @@ class NMPC(Controller):
 
       times = np.array([0] + list(np.cumsum(self.dts)))
 
-      f = interp1d(times, self.prev_x, axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
-      new_x = f(times + self.dts[0])
+      # f = interp1d(times, self.prev_x, axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
+      f = interp1d(times, self.prev_x, kind='linear', axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
+      diff = t - self.prev_t
+      new_x = f(times + diff)
       
       self.prev_x = new_x
       self.prev_x[:, 0] = x
@@ -97,7 +101,7 @@ class NMPC(Controller):
 
       times = np.array([0] + list(np.cumsum(self.dts[:-1])))
 
-      f = interp1d(times, self.prev_u, axis=1, bounds_error=False, fill_value=self.prev_u[:, -1])
+      f = interp1d(times, self.prev_u, kind='zero', axis=1, bounds_error=False, fill_value=self.prev_u[:, -1])
       new_u = f(times + self.dts[0])
 
       self.prev_u = new_u
@@ -114,7 +118,7 @@ class NMPC(Controller):
     W = np.diag(self.input_scaling)
     Winv = np.diag(1 / self.input_scaling)
 
-    self.compute_initial_state_guess((S @ state[:, None]).flatten())
+    self.compute_initial_state_guess((S @ state[:, None]).flatten(), t)
     self.compute_initial_control_guess()
 
     if not self.first_run:
@@ -127,13 +131,15 @@ class NMPC(Controller):
 
     # dynamics constraints
     for k in range(self.sqp_iters):
+      start = time.process_time_ns()
+
       constraints = []
       for i in range(self.N):
         idx = i
         next_idx = i+1
 
         dt = self.dts[i]
-        print(i, dt, t)
+        print(i, dt, t + sum(self.dts[:i]))
 
         # this should be shifted by one step
         prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
@@ -241,13 +247,15 @@ class NMPC(Controller):
       if self.constraints_with_slack:
         for i in range(self.N):
           dt = self.dts[i]
-          cost += dt * 10 * cp.sum(s[:, (i+1)*2])
-          cost += dt * 10 * cp.sum(s[:, (i+1)*2+1])
+          cost += dt * 50 * cp.sum(s[:, (i+1)*2])
+          cost += dt * 50 * cp.sum(s[:, (i+1)*2+1])
 
           cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2])
           cost += dt * 500 * cp.sum_squares(s[:, (i+1)*2+1])
 
       objective = cp.Minimize(cost)
+
+      end = time.process_time_ns()
 
       prob = cp.Problem(objective, constraints)
 
@@ -256,11 +264,17 @@ class NMPC(Controller):
       u.value = self.prev_u
 
       # The optimal objective value is returned by `prob.solve()`.
-      result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-8, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-8, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-6, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
       # result = prob.solve(solver='PIQP', verbose=True)
+      # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
+      # result = prob.solve(solver='SCS', verbose=True, eps=1e-2)
+
+      result = prob.solve(solver='CLARABEL', verbose=True, max_iter=5000)
+      # result = prob.solve(solver='QPALM', verbose=True, max_iter=5000)
 
       # options_cvxopt = {
       #     "max_iters": 5000,
@@ -271,6 +285,11 @@ class NMPC(Controller):
       #     "kktsolver": "robust"
       # }
       # result = prob.solve(solver='CVXOPT', **options_cvxopt)
+
+      if prob.status in ["infeasible", "unbounded"]:
+        infeasible_res = np.ones(self.sys.input_dim)
+        infeasible_res[0] = np.nan
+        return infeasible_res
 
       print("Sols")
       print(x.value)
@@ -288,6 +307,15 @@ class NMPC(Controller):
       self.first_run = False
 
       self.solve_time += prob.solver_stats.solve_time
+      # print('s', prob.solver_stats.solve_time)
+      # lin_sys_time = prob.solver_stats.extra_stats["info"]["lin_sys_time"]
+      # cone_time = prob.solver_stats.extra_stats["info"]["cone_time"]
+      # accel_time = prob.solver_stats.extra_stats["info"]["accel_time"]
+      # setup_time = prob.solver_stats.extra_stats["info"]["setup_time"]
+
+      # self.solve_time += (lin_sys_time + cone_time + accel_time + setup_time) / 1000
+
+      # self.solve_time += (end - start) / 1e9
 
       # data, _, _= prob.get_problem_data(cp.OSQP)
 
@@ -300,10 +328,13 @@ class NMPC(Controller):
       # print("B")
       # print(data['b'])
 
+    self.prev_t = t
+
     if prob.status not in ["infeasible", "unbounded"]:
       print("U")
       print(u.value[:, 0])
       print( Winv @ u.value[:, 0])
+
       return Winv @ u.value[:, 0]
       # return u.value[:, 0]
 
@@ -387,9 +418,11 @@ class NU_NMPC(Controller):
 
   def compute(self, state, t):
     res = self.nmpc.compute(state, t)
+
     self.solve_time = self.nmpc.solve_time
     self.prev_x = self.nmpc.prev_x
     self.prev_u = self.nmpc.prev_u
+    
     return res
 
 class MoveBlockingNMPC(Controller):
@@ -430,7 +463,7 @@ class NMPCC(Controller):
     else:
       self.ref = lambda t: reference
 
-    ts = np.linspace(0, 20, 1000)
+    ts = np.linspace(0, 20, 10000)
     pts = [self.ref(t) for t in ts]
     self.path = make_interp_spline(ts, pts)
     self.path_derivative = self.path.derivative(1)
@@ -451,7 +484,7 @@ class NMPCC(Controller):
     self.state_scaling = np.array([1] * self.sys.state_dim)
     self.input_scaling = np.array([1] * self.sys.input_dim)
 
-    self.progress_bounds = np.array([[0, 20], [0, 5]])
+    self.progress_bounds = np.array([[0, 20], [0, 3.5]])
     self.progress_input_bounds = np.array([[-5, 5]])
 
     self.progress_scaling = 1 / np.array([10, 5])
@@ -463,12 +496,12 @@ class NMPCC(Controller):
     self.input_reg = 1e-4
     self.progress_acc_reg = 1e-2
 
-    self.lag_weight = 1000
+    self.lag_weight = 2000
     self.cont_weight = 0.05
 
     # solver params
-    self.sqp_iters = 2
-    self.sqp_mixing = 0.25
+    self.sqp_iters = 3
+    self.sqp_mixing = 0.5
 
     self.first_run = True
 
@@ -478,10 +511,15 @@ class NMPCC(Controller):
     self.track_constraints = True
     self.track_constraints_with_slack = True
 
+    self.track_constraint_linear_weight = 1000
+    self.track_constraint_quadratic_weight = 2000
+
     self.move_blocking = False
     self.blocks = None
 
-  def compute_initial_state_guess(self, x):
+    self.prev_t = 0
+
+  def compute_initial_state_guess(self, x, t):
     if self.first_run:
       for i in range(self.N+1):
         self.prev_x.append(x)
@@ -495,12 +533,14 @@ class NMPCC(Controller):
       times = np.array([0] + list(np.cumsum(self.dts)))
 
       f = interp1d(times, self.prev_x, axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
-      new_x = f(times + self.dts[0])
+      
+      diff = t - self.prev_t
+      new_x = f(times + diff)
       
       self.prev_x = new_x
       self.prev_x[:, 0] = x
 
-  def compute_initial_control_guess(self):
+  def compute_initial_control_guess(self, t):
     if self.first_run:
       for _ in range(self.N):
         self.prev_u.append(np.zeros(self.input_dim))
@@ -513,28 +553,44 @@ class NMPCC(Controller):
       times = np.array([0] + list(np.cumsum(self.dts[:-1])))
 
       f = interp1d(times, self.prev_u, axis=1, bounds_error=False, fill_value=self.prev_u[:, -1])
-      new_u = f(times + self.dts[0])
+      
+      diff = t - self.prev_t
+      new_u = f(times + diff)
 
       self.prev_u = new_u
 
-  def project_state_to_progess(self, state):
-    prev_theta = 0
-    if not self.first_run:
-      prev_theta = 1. / self.progress_scaling[0] * self.prev_p[0, 0]
+  def project_state_to_progess(self, state, time):
+    if self.first_run:
+      return 0
+
+    diff = time - self.prev_t
+    initial_theta_guess = 1. / self.progress_scaling[0] * self.prev_p[0, 0] + \
+        diff * 1. / self.progress_scaling[1] * self.prev_p[1, 0] + \
+        diff ** 2 / 2. * 1. / self.progress_acc_scaling[0] * self.prev_up[0, 0]
+
+    if True:
+      # temporary for testing
+      return 1. / self.progress_scaling[0] * self.prev_p[0, 1]
+
+      return initial_theta_guess
 
     min_error = 1e6
     theta_best = 0
+    max_diff = self.progress_bounds[1,1] * diff
+
+    print(max_diff)
+
     for t in np.linspace(0, 20, 1000):
       e = self.error(state, t)
-      if abs(t - prev_theta) < 0.2 and e < min_error:
+      if abs(t - initial_theta_guess) < max_diff and e < min_error:
       # if e < min_error:
         min_error = e
         theta_best = t
 
     return theta_best
 
-  def compute_initial_progress_guess(self, state, T):
-    theta = self.project_state_to_progess(state)
+  def compute_initial_progress_guess(self, state, T, t):
+    theta = self.project_state_to_progess(state, t)
 
     if self.first_run:
       for i in range(self.N+1):
@@ -545,12 +601,14 @@ class NMPCC(Controller):
       times = np.array([0] + list(np.cumsum(self.dts)))
 
       f = interp1d(times, self.prev_p, axis=1, bounds_error=False, fill_value=self.prev_p[:, -1])
-      new_p = f(times + self.dts[0])
+
+      diff = t - self.prev_t
+      new_p = f(times + diff)
       
       self.prev_p = new_p
       self.prev_p[0, 0] = T[0,0] * theta
     
-  def compute_initial_progress_input_guess(self):
+  def compute_initial_progress_input_guess(self, t):
     if self.first_run:
       for i in range(self.N):
         self.prev_up.append(np.ones(1)*0.1)
@@ -564,7 +622,9 @@ class NMPCC(Controller):
       # print(self.prev_up)
       # print(len(self.prev_up))
       f = interp1d(times, self.prev_up, axis=1, bounds_error=False, fill_value=self.prev_up[:, -1])
-      new_up = f(times + self.dts[0])
+
+      diff = t - self.prev_t
+      new_up = f(times + diff)
       
       self.prev_up = new_up
 
@@ -662,11 +722,11 @@ class NMPCC(Controller):
     Tu = np.diag(self.progress_acc_scaling)
     Tuinv = np.diag(1 / self.progress_acc_scaling)
 
-    self.compute_initial_state_guess((S @ state[:, None]).flatten())
-    self.compute_initial_control_guess()
+    self.compute_initial_state_guess((S @ state[:, None]).flatten(), t)
+    self.compute_initial_control_guess(t)
 
-    self.compute_initial_progress_guess(state, T)
-    self.compute_initial_progress_input_guess()
+    self.compute_initial_progress_guess(state, T, t)
+    self.compute_initial_progress_input_guess(t)
 
     if not self.first_run:
       print(self.prev_x[:, 0])
@@ -720,7 +780,7 @@ class NMPCC(Controller):
           p[:, next_idx][:, None] == T @ A @ Tinv @ p[:, idx][:, None] + T @ B @ Tuinv @ up[:, idx][:, None] - T @ K
         )
       
-      theta = self.project_state_to_progess(state)
+      theta = self.project_state_to_progess(state, t)
       constraints.append(p[0, 0] == T[0, 0] * theta)
 
       # input constraints
@@ -858,8 +918,8 @@ class NMPCC(Controller):
       if self.track_constraints and self.track_constraints_with_slack:
         for i in range(self.N):
           dt = self.dts[i]
-          cost += dt * 10 * cp.sum(rs[0, (i+1)])
-          cost += dt * 500 * cp.sum_squares(rs[0, (i+1)])
+          cost += dt * self.track_constraint_linear_weight * cp.sum(rs[0, (i+1)])
+          cost += dt * self.track_constraint_quadratic_weight * cp.sum_squares(rs[0, (i+1)])
 
       objective = cp.Minimize(cost)
 
@@ -875,10 +935,10 @@ class NMPCC(Controller):
       # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-4, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
       # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
-      result = prob.solve(solver='SCS', verbose=True, eps=1e-2)
+      # result = prob.solve(solver='SCS', verbose=True, eps=1e-4)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
       # result = prob.solve(solver='PIQP', verbose=True)
-      # result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
+      result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
 
       # options_cvxopt = {
       #     "max_iters": 5000,
@@ -932,6 +992,9 @@ class NMPCC(Controller):
       print("U")
       print(u.value[:, 0])
       print( Winv @ u.value[:, 0])
+
+      self.prev_t = t
+
       return Winv @ u.value[:, 0]
       # return u.value[:, 0]
 
@@ -1176,7 +1239,7 @@ class PenaltyiLQR(Controller):
     self.prev_u = [np.zeros(self.input_dim)] * len(self.dts)
     self.prev_x = []
 
-    self.max_iters = 5
+    self.max_iters = 10
 
     self.linearization = jax.jit(self.sys.linearization)
 
@@ -1195,6 +1258,8 @@ class PenaltyiLQR(Controller):
         sum += q1 * jnp.exp(q2 * (inp[i] - self.sys.input_limits[i, 1]))
 
       return sum
+    
+    self.b = barrier
     
     self.bx = jax.jit(jax.jacfwd(barrier, argnums=0))
     self.bxx = jax.jit(jax.jacfwd(self.bx, argnums=0))
@@ -1220,7 +1285,24 @@ class PenaltyiLQR(Controller):
         self.prev_u[i] = new_u[:, i]
       # self.prev_u = new_u
 
-  def fwd_pass(self, xs, us, ks, Ks, alpha = 0.5):
+  def cost_w_penalty(self, xs, us, t0):
+    c = 0
+    t = t0
+
+    for i in range(len(us)):
+      dt = self.dts[i]
+      diff = (xs[i][:, None] - self.ref(t))
+      
+      c += dt * diff.T @ self.cost.Q @ diff
+      c += dt * us[i][:, None].T @ self.cost.R @ us[i][:, None]
+      
+      c += dt * self.b(xs[i], us[i], 0.1, 2)
+      
+      t += dt
+      
+    return c
+
+  def fwd_pass(self, xs, us, ks, Ks, t0, alpha = 0.5):
     # rollout of trajectory with control computed by backward pass
     xs_new = [xs[0]]
     us_new = []
@@ -1234,8 +1316,6 @@ class PenaltyiLQR(Controller):
 
       us_new.append(u[:, None] + alpha * ks[i])
 
-    cost = 0
-
     print('rolling out with control')
 
     for i in range(len(self.dts)):
@@ -1248,7 +1328,7 @@ class PenaltyiLQR(Controller):
       xn = self.sys.step(xs_new[i], us_new[i], dt, "euler")
       xs_new.append(xn)
 
-    print("A")
+    cost = self.cost_w_penalty(xs_new, us_new, t0)
 
     return xs_new, us_new, cost
 
@@ -1285,13 +1365,16 @@ class PenaltyiLQR(Controller):
       prev_input = us[u_idx][:, None]
       A, B, F = self.linearization(prev_state.flatten(), prev_input.flatten(), dt)
 
-      print('x prev\n', prev_state)
-      print('u_prev\n', prev_input)
+      # print('x prev\n', prev_state)
+      # print('u_prev\n', prev_input)
 
       bQ, bq, bR, br = self.quadratized_penalty(prev_state.flatten(), prev_input.flatten())
 
       Q = self.cost.Q + bQ
       R = self.cost.R + bR
+
+      Q = dt * Q
+      R = dt * R
 
       # print(Q)
       # print(R)
@@ -1301,11 +1384,11 @@ class PenaltyiLQR(Controller):
 
       lin_ref_tracking = -self.cost.Q @ self.ref(t)
 
-      lx = Q @ prev_state + lin_ref_tracking + bq[:, None]
-      lu = R @ prev_input + br[:, None]
+      lx = Q @ prev_state + dt * lin_ref_tracking + dt * bq[:, None]
+      lu = R @ prev_input + dt * br[:, None]
 
-      print('lx\n', lx)
-      print('lu\n', lu)
+      # print('lx\n', lx)
+      # print('lu\n', lu)
 
       lxx = Q
       luu = R
@@ -1319,9 +1402,9 @@ class PenaltyiLQR(Controller):
 
       Quu_inv = jnp.linalg.inv(Quu)
 
-      print('Quu\n', Quu)
-      print('Quu_inv\n', Quu_inv)
-      print('Qu\n', Qu)
+      # print('Quu\n', Quu)
+      # print('Quu_inv\n', Quu_inv)
+      # print('Qu\n', Qu)
 
       d = -Quu_inv @ Qu
       K = -Quu_inv @ Qux
@@ -1329,24 +1412,22 @@ class PenaltyiLQR(Controller):
       ks[u_idx] = d 
       Ks[u_idx] = K
 
-      print('d\n', d)
-      print('K\n', K)
+      # print('d\n', d)
+      # print('K\n', K)
 
       sk = Qx + K.T @ Quu @ d + K.T @ Qu + Qux.T @ d
       Sk = Qxx + K.T @ Quu @ K  + K.T @ Qux + Qux.T @ K
 
     return ks, Ks
 
-  def rollout(self, x0, us):
+  def rollout(self, x0, us, t0):
     xs = [x0]
-    cost = 0
 
     for i in range(len(self.dts)):
       dt = self.dts[i]
       xs.append(self.sys.step(xs[i], us[i], dt, "euler"))
 
-      cost += 0
-
+    cost = self.cost_w_penalty(xs, us, t0)
     return xs, cost
 
   def compute(self, state, t):
@@ -1354,25 +1435,31 @@ class PenaltyiLQR(Controller):
     self.compute_initial_control_guess()
 
     us = self.prev_u    
-    xs, cost = self.rollout(state, us)
+    xs, cost = self.rollout(state, us, t)
 
-    for _ in range(self.max_iters):
-      print('backward pass')
+    for i in range(self.max_iters):
+      print('iter', i)
+
+      # print('backward pass')
       ks, Ks = self.bwd_pass(xs, us, t)
 
-      print('fwd pass')
-      xs_new, us_new, cost_new = self.fwd_pass(xs, us, ks, Ks)
+      # print('fwd pass')
+      for alpha in [0.5**i for i in range(3)]:
+        xs_new, us_new, cost_new = self.fwd_pass(xs, us, ks, Ks, t, alpha)
 
-      # print(xs_new)
+        # print(xs_new)
 
-      if cost_new < cost or True:
-        xs = xs_new
-        us = us_new
+        print('costs', cost, cost_new)
 
-        # if (abs(cost_new - cost)/cost) < self.converge_thresh:
-          # break
+        if cost_new < cost:
+          xs = xs_new
+          us = us_new
 
-        cost = cost_new
+          # if (abs(cost_new - cost)/cost) < self.converge_thresh:
+            # break
+
+          cost = cost_new
+          break
 
     self.first_run = False
 

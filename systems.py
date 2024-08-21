@@ -82,7 +82,7 @@ class System:
 
     A_disc = self.tmp(x, u, dt)
     B_disc = self.tmp_inp(x, u, dt)
-    K = (A_disc @ x[:, None] + B_disc @ u[:, None] - self.step_euler(x, u, dt)[:, None])
+    K = (A_disc @ x[:, None] + B_disc @ u[:, None] - self.step_rk4(x, u, dt)[:, None])
 
     return A_disc, B_disc, K
 
@@ -135,8 +135,8 @@ class JerkMasspointND(System):
     self.state_dim = 3*N
     self.input_dim = N
 
-    self.state_limits = np.array([[-10, 10], [-1, 1], [-3, 3]]*N)
-    self.input_limits = np.array([[-10, 10]]*N)
+    self.state_limits = np.array([[-10, 10], [-3, 3], [-10, 10]]*N)
+    self.input_limits = np.array([[-20, 20]]*N)
 
     super().__init__()
 
@@ -199,8 +199,8 @@ class Cartpole(System):
     self.state_dim = 4
     self.input_dim = 1
 
-    self.state_limits = np.array([[-20, 20], [-40, 40], [-20, 20], [-100, 100]])
-    self.input_limits = np.array([[-100, 100]])
+    self.state_limits = np.array([[-1, 1], [-40, 40], [-20, 20], [-30, 30]])
+    self.input_limits = np.array([[-20, 20]])
 
     super().__init__()
   
@@ -231,8 +231,8 @@ class DoubleCartpole(System):
     self.state_dim = 6
     self.input_dim = 1
 
-    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [-80, 80], [-80, 80], [-80, 80]])
-    self.input_limits = np.array([[-80, 80]])
+    self.state_limits = np.array([[-5, 5], [-20, 20], [-20, 20], [-10, 10], [-30, 30], [-30, 30]])
+    self.input_limits = np.array([[-20, 20]])
 
     super().__init__()
 
@@ -241,12 +241,12 @@ class DoubleCartpole(System):
 
   def f(self, state, u):
     x = state
-    m = 0.6
+    m = 1.
     m1 = 0.2
     m2 = 0.2
     l1 = 0.25
     l2 = 0.25
-    g = 9.81
+    g = 9.80665
     L1 = 2 * l1
     L2 = 2 * l2
     J1 = m1 * L1 ** 2 / 12
@@ -256,7 +256,7 @@ class DoubleCartpole(System):
     h1 = m + m1 + m2
     h2 = m1 * l1 + m2 * L1
     h3 = m2 * l2
-    h4 = m1 * l1 ** 2 + m2 * L1 ** 1 + J1
+    h4 = m1 * l1 ** 2 + m2 * L1 ** 2 + J1
     h5 = m2 * l2 * L1
     h6 = m2 * l2 ** 2 + J2
     h7 = m1 * l1 * g + m2 * L1 * g
@@ -269,28 +269,37 @@ class DoubleCartpole(System):
     M = jnp.asarray([[h1, h2 * jnp.cos(x[1]), h3 * jnp.cos(x[2])],
                      [h2 * jnp.cos(x[1]), h4, h5 * jnp.cos(x[1] - x[2])],
                      [h3 * jnp.cos(x[2]), h5 * jnp.cos(x[1] - x[2]), h6] ])
-    G = jnp.asarray([0., -h7 * jnp.sin(x[1]), -h8 * jnp.sin(x[2])])
+    
+    G = jnp.asarray([[0.], 
+                     [h7 * jnp.sin(x[1])], 
+                     [h8 * jnp.sin(x[2])]])
 
     # Coriolis and centrifugal vector
-    C = jnp.asarray([[0., -h2 * jnp.sin(x[1]) * x[4], -h3 * x[5] * jnp.sin(x[2])], 
-                  [0., 0., h5 * x[5] * jnp.sin(x[1] - x[2])], 
-                  [0., -h5 * x[4] * jnp.sin(x[1] - x[2]), 0.]])
+    C = jnp.asarray([[0., h2 * jnp.sin(x[1]) * x[4], h3 * jnp.sin(x[2]) * x[5]], 
+                  [0., 0., -h5 * jnp.sin(x[1] - x[2]) * x[5]], 
+                  [0., h5 * jnp.sin(x[1] - x[2]) * x[4], 0.]])
 
     u = u[0]
-    Q = jnp.asarray([u, 0., 0.])
+    Q = jnp.asarray([[u], [0.], [0.]])
+
+    # jax.debug.print("C: \n{c}", c=C)
+    # jax.debug.print("x: \n{x}", x=x[3:6])
+    # jax.debug.print("G: \n{G}", G=G.T)
 
     # Create state space
     M_invers = jnp.linalg.inv(M)
-    q_dot = C @ x[3:6]
-    q_dotdot = M_invers @ (Q.T - q_dot - G.T)
+    q_dot = C @ x[3:6][:, None]
+    # jax.debug.print("qd: \n{qd}", qd=q_dot)
+
+    q_dotdot = M_invers @ (Q + q_dot + G)
 
     # Create function
     x_vel = x[3]
     a1_vel = x[4]
     a2_vel = x[5]
-    x_acc = q_dotdot[0]
-    a1_acc = q_dotdot[1]
-    a2_acc = q_dotdot[2]
+    x_acc = q_dotdot[0, 0]
+    a1_acc = q_dotdot[1, 0]
+    a2_acc = q_dotdot[2, 0]
 
     return jnp.asarray([x_vel, a1_vel, a2_vel, x_acc, a1_acc, a2_acc])
 
@@ -299,7 +308,7 @@ class Quadcopter2D(System):
     self.state_dim = 6
     self.input_dim = 2
 
-    self.state_limits = np.array([[-20, 20], [-5, 20], [-20, 20], [-80, 80], [-80, 80], [-80, 80]])
+    self.state_limits = np.array([[-0.1, 20], [-5, 5], [-20, 20], [-10, 10], [-10, 10], [-80, 80]])
     self.input_limits = np.array([[0, 2], [0, 2]])
 
     super().__init__()
@@ -635,8 +644,8 @@ class Unicycle(System):
     self.state_dim = 3
     self.input_dim = 2
 
-    self.state_limits = np.array([[-20, 20], [-20, 20], [-10, 10]])
-    self.input_limits = np.array([[-0.1, 5], [-3, 3]])
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-50, 50]])
+    self.input_limits = np.array([[-0.1, 3], [-10, 10]])
 
     # self.state_limits = np.array([[-20, 20], [-20, 20], [-10, 10], [0.3, 3.5], [-2, 2], [-7, 7]])
     # self.input_limits = np.array([[-0.1, 1], [-0.35, 0.35]])
@@ -662,8 +671,8 @@ class Unicycle2ndOrder(System):
     self.input_dim = 2
 
     # x, y, theta, v, omega
-    self.state_limits = np.array([[-20, 20], [-20, 20], [-20, 20], [-20, 20], [-10, 10]])
-    self.input_limits = np.array([[-0.1, 5], [-3, 3]])
+    self.state_limits = np.array([[-20, 20], [-20, 20], [-50, 50], [-0.1, 20], [-30, 30]])
+    self.input_limits = np.array([[-100, 100], [-100, 100]])
 
     super().__init__()
     
