@@ -2547,7 +2547,11 @@ def mpcc_racecar_test():
   plt.show()
 
 def mpcc_amzracecar_test(track='fig8'):
-  T_sim = 9
+  if track == 'fig8':
+    T_sim = 5
+  else:
+     T_sim = 9
+  
   dt = 0.025
 
   sys = AMZRacecar()
@@ -3488,13 +3492,12 @@ def make_quadcopter_cost_comp_for_blog(num_runs=1):
   plt.savefig(f'./img/blog/quadcopter_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
 
 def make_racecar_analysis(num_runs=1, track='fig8'):
-  Ns = [5, 10, 20, 40]
-
   if track=='fig8':
     T_sim = 5
     Ns = [10, 15, 20, 30, 40]
   else:
     T_sim = 9
+    Ns = [10, 15, 20, 30, 40]
 
   dt_sim = 0.025
 
@@ -3648,8 +3651,8 @@ if __name__ == "__main__":
   # make_masspoint_cost_comp_for_blog(num_runs=5)
   # make_quadcopter_cost_comp_for_blog(num_runs=5)
   # make_cartpole_cost_comp_for_blog(num_runs=5)
-  # make_racecar_analysis(num_runs=5, track='fig8')
-  # make_racecar_analysis(num_runs=1, track='race')
+  make_racecar_analysis(num_runs=3, track='fig8')
+  make_racecar_analysis(num_runs=3, track='race')
 
   # make_double_cartpole_cost_comp_for_blog()
 
@@ -3690,6 +3693,7 @@ if __name__ == "__main__":
   # mpcc_test()
   # mpcc_jerk_test()
   # mpcc_racecar_test()
-  mpcc_amzracecar_test(track='race')
+  # mpcc_amzracecar_test(track='race')
+  # mpcc_amzracecar_test(track='fig8')
 
   plt.show()
