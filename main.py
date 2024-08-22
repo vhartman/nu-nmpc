@@ -408,6 +408,40 @@ def figure_eight(t, r=1):
   y = jax.numpy.sin(t) * jax.numpy.cos(t) * r
   return jax.numpy.asarray([x, y])
 
+from scipy.interpolate import interp1d, make_interp_spline
+def figure_eight_bounds(r=1, offset=0.15):
+  figure_eight_knots = np.linspace(0, 2*np.pi, 200)
+  figure_eight_pts = [figure_eight(t, r) for t in figure_eight_knots]
+  figure_eight_spline = make_interp_spline(figure_eight_knots, figure_eight_pts)
+  figure_eight_tangent = figure_eight_spline.derivative(1)
+
+  inners = []
+  outers = []
+
+  for i, t in enumerate(figure_eight_knots):
+    tangent = figure_eight_tangent(t)
+
+    normal = np.array([-tangent[1], tangent[0]])
+    normal = normal / np.linalg.norm(normal)
+    
+    inners.append(figure_eight_pts[i] + offset*normal)
+    outers.append(figure_eight_pts[i] - offset*normal)
+
+  return inners, outers
+
+# plt.figure()
+# figure_eight_knots = np.linspace(0, 2*np.pi, 500)
+# figure_eight_pts = [figure_eight(t) for t in figure_eight_knots]
+# inners, outers = figure_eight_bounds()
+
+# plt.plot(*np.array(figure_eight_pts).T)
+# plt.plot(*np.array(inners).T)
+# plt.plot(*np.array(outers).T)
+
+# plt.axis("equal")
+
+# plt.show()
+
 track_center = np.loadtxt('./track/center.txt')
 track_inner = np.loadtxt('./track/inner.txt')
 track_outer = np.loadtxt('./track/outer.txt')
@@ -2596,13 +2630,13 @@ def mpcc_amzracecar_test(track='fig8'):
   # dts = get_linear_spacing(dt, 40 * dt, 20) # 7.95, 13
   # dts = get_linear_spacing(dt, 40 * dt, 10) # does not work
   # dts = get_linear_spacing(dt, 30 * dt, 20) # 7.9
-  # dts = get_linear_spacing(dt, 40 * dt, 20) # 8.125, 25
+  dts = get_linear_spacing(dt, 40 * dt, 20) # 8.125, 25
   # dts = get_linear_spacing(dt, 40 * dt, 10) # 8.125, 25
   # plt.plot(dts)
 
   # dts = get_linear_spacing_with_max_dt(40 * dt, dt, 0.2, 10) # fails
   # dts = get_power_spacing(dt, 40 * dt, 20) # 8.05
-  dts = get_power_spacing(dt, 20 * dt, 10) # 8.075, 22
+  # dts = get_power_spacing(dt, 20 * dt, 10) # 8.075, 22
 
   # plt.plot(dts)
   # plt.show()
@@ -2635,14 +2669,23 @@ def mpcc_amzracecar_test(track='fig8'):
     y = [states[i][1] for i in range(len(times))]
     v = [states[i][3] for i in range(len(times))]
 
-    x_ref = [ref(times[i])[0] for i in range(len(times))]
-    y_ref = [ref(times[i])[1] for i in range(len(times))]
+    x_ref = [ref(i)[0] for i in np.linspace(0, goal_progress, 500)]
+    y_ref = [ref(i)[1] for i in np.linspace(0, goal_progress, 500)]
 
-    x_inner = [racetrack(times[i], track_inner)[0] for i in range(len(times))]
-    y_inner = [racetrack(times[i], track_inner)[1] for i in range(len(times))]
-    
-    x_outer = [racetrack(times[i], track_outer)[0] for i in range(len(times))]
-    y_outer = [racetrack(times[i], track_outer)[1] for i in range(len(times))]
+    if track == 'fig8':
+      inners, outers = figure_eight_bounds(1.2)
+
+      x_inner = np.array(inners)[:, 0]
+      y_inner = np.array(inners)[:, 1]
+
+      x_outer = np.array(outers)[:, 0]
+      y_outer = np.array(outers)[:, 1]
+    else:
+      x_inner = [racetrack(i, track_inner)[0] for i in np.linspace(0, goal_progress, 500)]
+      y_inner = [racetrack(i, track_inner)[1] for i in np.linspace(0, goal_progress, 500)]
+      
+      x_outer = [racetrack(i, track_outer)[0] for i in np.linspace(0, goal_progress, 500)]
+      y_outer = [racetrack(i, track_outer)[1] for i in np.linspace(0, goal_progress, 500)]
 
     progress = res.progress
 
@@ -2676,9 +2719,9 @@ def mpcc_amzracecar_test(track='fig8'):
 
     plt.axis('equal')
 
-    if track != 'fig8':
-      plt.plot(x_inner, y_inner, '--', color='black')
-      plt.plot(x_outer, y_outer, '--', color='black')
+    # if track != 'fig8':
+    plt.plot(x_inner, y_inner, '--', color='black')
+    plt.plot(x_outer, y_outer, '--', color='black')
 
     ax = plt.gca()
 
@@ -2719,11 +2762,11 @@ def mpcc_amzracecar_test(track='fig8'):
     ax.set_aspect('equal')
     ax.grid()
     
-    ax.plot(x_ref, y_ref, '--', color='tab:orange')
+    ax.plot(x_ref, y_ref, '--', color='black', alpha=0.5)
     
-    if track != 'fig8':
-      ax.plot(x_inner, y_inner, '--', color='black')
-      ax.plot(x_outer, y_outer, '--', color='black')
+    # if track != 'fig8':
+    ax.plot(x_inner, y_inner, '-', color='black')
+    ax.plot(x_outer, y_outer, '-', color='black')
 
     pred, = ax.plot([], [], '-')
     path, = ax.plot([], [], '--')
@@ -2743,8 +2786,8 @@ def mpcc_amzracecar_test(track='fig8'):
       y_pred = [res.state_predictions[i][1, j] for j in range((res.state_predictions[i].shape[1]))]
       angle_pred = [res.state_predictions[i][2, j] / state_scaling[2] for j in range((res.state_predictions[i].shape[1]))]
       
-      history_x = x[:i]
-      history_y = y[:i]
+      history_x = x[:i*10]
+      history_y = y[:i*10]
 
       pred.set_data(x_pred, y_pred)
       path.set_data(history_x, history_y)
@@ -2776,7 +2819,7 @@ def mpcc_amzracecar_test(track='fig8'):
     ani = animation.FuncAnimation(
       fig, animate, len(computation_times), interval=dt*1000, blit=True)
 
-    ani.save('amzracecar_animation.gif', writer='pillow', fps=30)
+    ani.save(f'amzracecar_animation_{track}.gif', writer='pillow', fps=30, savefig_kwargs={ "bbox_inches": "tight" })
 
     # cost = 0
     # for i in range(len(states)-1):
@@ -3497,7 +3540,7 @@ def make_racecar_analysis(num_runs=1, track='fig8'):
     Ns = [10, 15, 20, 30, 40]
   else:
     T_sim = 9
-    Ns = [10, 15, 20, 30, 40]
+    Ns = [15, 20, 30, 40]
 
   dt_sim = 0.025
 
@@ -3612,28 +3655,28 @@ def make_racecar_analysis(num_runs=1, track='fig8'):
     median_laptimes = np.median(all_laptimes_all_runs, axis=0)
     median_violations = np.median(all_violations_all_runs, axis=0)
 
-    plt.figure('laptimes')
+    plt.figure(f'laptimes {track}')
     plt.errorbar(median_solve_times, median_laptimes,
                  xerr=[median_solve_times - np.min(all_solvetimes_all_runs, axis=0), np.max(all_solvetimes_all_runs, axis=0) - median_solve_times], 
                  label=name, color=solver_to_color_map[name],
                  marker='o')
     # plt.plot(median_solve_times, all_laptimes, label=name)
 
-    plt.figure('violations')
+    plt.figure(f'violations {track}')
     plt.errorbar(median_solve_times, median_violations,
                  xerr=[median_solve_times - np.min(all_solvetimes_all_runs, axis=0), np.max(all_solvetimes_all_runs, axis=0) - median_solve_times], 
                  label=name, color=solver_to_color_map[name],
                  marker='o')
     # plt.plot(median_solve_times, all_violations, label=name)
 
-  plt.figure('laptimes')
+  plt.figure(f'laptimes {track}')
   plt.xlabel('Solve time [s]')
   plt.ylabel('Laptime [s]')
   plt.legend()
 
   plt.savefig(f'./img/blog/amzracecar_laptimes_comp_{track}.png', format='png', dpi=300, bbox_inches = 'tight')
   
-  plt.figure('violations')
+  plt.figure(f'violations {track}')
   plt.xlabel('Solve time [s]')
   plt.ylabel('Track violation')
   plt.legend()
@@ -3651,8 +3694,8 @@ if __name__ == "__main__":
   # make_masspoint_cost_comp_for_blog(num_runs=5)
   # make_quadcopter_cost_comp_for_blog(num_runs=5)
   # make_cartpole_cost_comp_for_blog(num_runs=5)
-  make_racecar_analysis(num_runs=3, track='fig8')
-  make_racecar_analysis(num_runs=3, track='race')
+  # make_racecar_analysis(num_runs=3, track='fig8')
+  # make_racecar_analysis(num_runs=1, track='race')
 
   # make_double_cartpole_cost_comp_for_blog()
 
@@ -3693,7 +3736,7 @@ if __name__ == "__main__":
   # mpcc_test()
   # mpcc_jerk_test()
   # mpcc_racecar_test()
-  # mpcc_amzracecar_test(track='race')
+  mpcc_amzracecar_test(track='race')
   # mpcc_amzracecar_test(track='fig8')
 
   plt.show()

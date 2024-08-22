@@ -939,6 +939,7 @@ class NMPCC(Controller):
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
       # result = prob.solve(solver='PIQP', verbose=True)
       result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
+      # result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
 
       # options_cvxopt = {
       #     "max_iters": 5000,
