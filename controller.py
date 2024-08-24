@@ -110,7 +110,7 @@ class NMPC(Controller):
     x = cp.Variable((self.state_dim, self.N+1))
     u = cp.Variable((self.input_dim, self.N))
 
-    s = cp.Variable((self.state_dim, (self.N+1)*2))
+    s = cp.Variable((self.state_dim, (self.N+1)*2), nonneg=True)
 
     S = np.diag(self.state_scaling)
     Sinv = np.diag(1 / self.state_scaling)
@@ -125,6 +125,7 @@ class NMPC(Controller):
       print(self.prev_x[:, 0])
     
     print("state")
+    print(state)
     print(self.prev_x)
 
     self.solve_time = 0
@@ -155,11 +156,18 @@ class NMPC(Controller):
         A, B, K = self.linearization(prev_state, prev_input, dt)
 
         constraints.append(
-            x[:, next_idx][:, None] == S @ (A) @ Sinv @ x[:, idx][:, None] + S @ B @ Winv @ u[:, idx][:, None] - S @ K
+            x[:, next_idx][:, None] == 
+            S @ A @ Sinv @ x[:, idx][:, None] + 
+            S @ B @ Winv @ u[:, idx][:, None] - S @ K
         )
+
+        # print(prev_state)
+        # print(prev_input)
 
         # print("A")
         # print(A)
+        # print(B)
+        # print(K)
         # print("scaled a")
         # print(S @ (I + A) @ Sinv )
         # print(S @ B @ Winv)
@@ -188,14 +196,14 @@ class NMPC(Controller):
 
       # state constraints
       if self.constraints_with_slack:
-        if not self.first_run:
+        if True or not self.first_run:
           for i in range(self.N + 1):
             constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i*2][:, None])
             constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i*2+1][:, None])
 
         # slack variables
-        for i in range((self.N + 1)*2):
-          constraints.append(s[:, i] >= 0)
+        # for i in range((self.N + 1)*2):
+        #   constraints.append(s[:, i] >= 0)
       else:
         if not self.first_run:
           for i in range(self.N + 1):
@@ -233,6 +241,8 @@ class NMPC(Controller):
         cost += dt * cp.quad_form(u[:,i][:, None], Rs)
 
         curr_time += dt
+
+        print(x_ref)
 
       # terminal cost
       x_ref = self.ref(curr_time)
@@ -276,6 +286,18 @@ class NMPC(Controller):
       result = prob.solve(solver='CLARABEL', verbose=True, max_iter=5000)
       # result = prob.solve(solver='QPALM', verbose=True, max_iter=5000)
 
+      # data, _, _= prob.get_problem_data(cp.CLARABEL)
+
+      # print(data)
+
+      # print("A")
+      # print(data['A'].todense())
+
+      # if t == 0.05:
+      #   print(u.value)
+      #   print(x.value)
+      #   return np.nan
+
       # options_cvxopt = {
       #     "max_iters": 5000,
       #     "verbose": True,
@@ -291,9 +313,9 @@ class NMPC(Controller):
         infeasible_res[0] = np.nan
         return infeasible_res
 
-      print("Sols")
-      print(x.value)
-      print(u.value)
+      # print("Sols")
+      # print(x.value)
+      # print(u.value)
 
       # update solutions for linearization
       # TODO: should really be a line search
@@ -303,6 +325,10 @@ class NMPC(Controller):
       else:
         self.prev_x = x.value * self.sqp_mixing + self.prev_x * (1 - self.sqp_mixing)
         self.prev_u = u.value * self.sqp_mixing + self.prev_u * (1 - self.sqp_mixing)
+
+      print('new prev vals')
+      print(self.prev_x)
+      print(self.prev_u)
 
       self.first_run = False
 
@@ -317,7 +343,7 @@ class NMPC(Controller):
 
       # self.solve_time += (end - start) / 1e9
 
-      # data, _, _= prob.get_problem_data(cp.OSQP)
+      # data, _, _= prob.get_problem_data(cp.CLARABEL)
 
       # print(data)
 
@@ -340,75 +366,295 @@ class NMPC(Controller):
 
     return np.zeros(self.sys.input_dim)
   
-def get_linear_spacing_with_max_dt(T, dt0, dt_max, steps):
-  # copy and paste from claude
-  def calculate_T(alpha, dt_max, dt, N):
-    if alpha == 0:
-      return N * min(dt_max, dt)
+class ParameterizedNMPC(Controller):
+  def __init__(self, system, N, dt, quadratic_cost, reference):
+    self.sys = system
+    self.N = N
+    self.dt = dt
+
+    self.cost = quadratic_cost
+
+    if callable(reference):
+      self.ref = reference
+    else:
+      self.ref = lambda t: reference
+
+    self.state_dim = self.sys.state_dim
+    self.input_dim = self.sys.input_dim
+
+    self.prev_x = []
+    self.prev_u = []
+
+    self.dts = [self.dt] * self.N
+    #self.dts = [self.dt + 0.005*(i+1) for i in range(self.N)]
+
+    self.input_scaling = np.array([1] * self.sys.input_dim)
+    self.state_scaling = np.array([1] * self.sys.state_dim)
+
+    # solver params
+    self.sqp_iters = 3
+    self.sqp_mixing = 0.8
+
+    self.first_run = True
+
+    self.linearization = jax.jit(self.sys.linearization)
+
+    self.constraints_with_slack = True
+
+    self.move_blocking = False
+    self.blocks = None
+
+    self.prev_t = 0
+
+    # parameters
+    self.As = None
+    self.Bs = None
+    self.Ks = None
+
+    self.x_ref = None
+    self.x0 = None
+
+    # variables
+    self.x = None
+    self.u = None
+    self.s = None
+
+    self.problem = None
+
+    # self.setup_problem()
+
+  def setup_problem(self):
+    self.x = cp.Variable((self.state_dim, self.N+1))
+    self.u = cp.Variable((self.input_dim, self.N))
+
+    self.s = cp.Variable((self.state_dim, (self.N+1)*2), nonneg=True)
+
+    self.As = [cp.Parameter((self.state_dim, self.state_dim)) for _ in range(self.N)]
+    self.Bs = [cp.Parameter((self.state_dim, self.input_dim)) for _ in range(self.N)]
+    self.Ks = [cp.Parameter((self.state_dim, 1)) for _ in range(self.N)]
+    self.x0 = cp.Parameter((self.state_dim, 1))
     
-    ts = [np.min([dt + alpha * i, dt_max]) for i in range(N)]
-    return sum(ts)
+    self.x_ref = [cp.Parameter((self.state_dim, 1)) for _ in range(self.N + 1)]
 
-  def solve_for_alpha(target_T, dt0, dt_max, N, tolerance=1e-6, max_iterations=1000):
-    alpha_min = 0
-    alpha_max = (dt_max - dt0) * 2 / N  # An initial guess for upper bound
-    print(alpha_max)
+    S = np.diag(self.state_scaling)
+    Sinv = np.diag(1 / self.state_scaling)
 
-    for _ in range(max_iterations):
-      alpha = (alpha_min + alpha_max) / 2
-      calculated_T = calculate_T(alpha, dt_max, dt0, N)
+    W = np.diag(self.input_scaling)
+    Winv = np.diag(1 / self.input_scaling)
+
+    constraints = []
+    for i in range(self.N):
+      idx = i
+      next_idx = i+1
+
+      constraints.append(
+          self.x[:, next_idx][:, None] == 
+            S @ self.As[i] @ Sinv @ self.x[:, idx][:, None] + 
+            S @ self.Bs[i] @ Winv @ self.u[:, idx][:, None] - S @ self.Ks[i]
+      )
+
+    constraints.append(self.x[:, 0][:, None] == S @ self.x0)
+
+    # input constraints
+    for i in range(self.N):
+      constraints.append(self.u[:, i][:, None] >= W @ self.sys.input_limits[:, 0][:, None])
+      constraints.append(self.u[:, i][:, None] <= W @ self.sys.input_limits[:, 1][:, None])
+
+    # if self.move_blocking:
+    #   idx = 0
+    #   for block_len in self.blocks:
+    #     if block_len > 1:
+    #       for i in range(1, block_len):
+    #         constraints.append(self.u[:, idx] == self.u[:, idx + i])
+        
+    #     idx += block_len
+
+    # state constraints
+    if self.constraints_with_slack:
+      for i in range(self.N + 1):
+        constraints.append(self.x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - self.s[:, i*2][:, None])
+        constraints.append(self.x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + self.s[:, i*2+1][:, None])
+
+      # slack variables
+      # for i in range((self.N + 1)*2):
+      #   constraints.append(self.s[:, i] >= 0)
+    else:
+      for i in range(self.N + 1):
+        constraints.append(self.x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
+        constraints.append(self.x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
+
+    # trust region constraints
+    # if k > 0:
+    #   for i in range(self.N + 1):
+    #     if i < self.N:
+    #       constraints.append(cp.norm(u[:, i] - self.prev_u[:, i], "inf") <= 2)
+
+    #     constraints.append(cp.norm(x[:, i] - self.prev_x[:, i], "inf") <= 2)
+
+    Qs = Sinv @ self.cost.Q @ Sinv
+    QNs = Sinv @ self.cost.QN @ Sinv
+    Rs = Winv @ self.cost.R @ Winv
+
+    # TODO: normalize cost by total prediction horizn?
+    cost = 0
+    for i in range(self.N): 
+      dt = self.dts[i]
+      cost += dt * cp.quad_form((self.x[:, i] [:, None] - S @ self.x_ref[i]), Qs)
+      cost += dt * cp.quad_form(self.u[:,i][:, None], Rs)
+
+    # terminal cost
+    cost += cp.quad_form((self.x[:, -1] [:, None] - S @ self.x_ref[self.N]), QNs)
+
+    # slack variables
+    if self.constraints_with_slack:
+      for i in range(self.N):
+        dt = self.dts[i]
+        cost += dt * 50 * cp.sum(self.s[:, (i+1)*2])
+        cost += dt * 50 * cp.sum(self.s[:, (i+1)*2+1])
+
+        cost += dt * 500 * cp.sum_squares(self.s[:, (i+1)*2])
+        cost += dt * 500 * cp.sum_squares(self.s[:, (i+1)*2+1])
+
+    objective = cp.Minimize(cost)
+    self.problem = cp.Problem(objective, constraints)
+
+  def compute_initial_state_guess(self, x, t):
+    if self.first_run:
+      for i in range(self.N+1):
+        self.prev_x.append(x)
+
+      self.prev_x = np.array(self.prev_x).T
+    else:
+      times = np.array([0] + list(np.cumsum(self.dts)))
+
+      # f = interp1d(times, self.prev_x, axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
+      f = interp1d(times, self.prev_x, kind='linear', axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
+      diff = t - self.prev_t
+      new_x = f(times + diff)
       
-      if abs(calculated_T - target_T) < tolerance:
-        return alpha
+      self.prev_x = new_x
+      self.prev_x[:, 0] = x
+
+  def compute_initial_control_guess(self):
+    if self.first_run:
+      for _ in range(self.N):
+        self.prev_u.append(np.zeros(self.input_dim))
+
+      self.prev_u = np.array(self.prev_u).T
+    else:
+      times = np.array([0] + list(np.cumsum(self.dts[:-1])))
+
+      f = interp1d(times, self.prev_u, kind='zero', axis=1, bounds_error=False, fill_value=self.prev_u[:, -1])
+      new_u = f(times + self.dts[0])
+
+      self.prev_u = new_u
+
+  def compute(self, state, time):
+    S = np.diag(self.state_scaling)
+    Sinv = np.diag(1 / self.state_scaling)
+
+    W = np.diag(self.input_scaling)
+    Winv = np.diag(1 / self.input_scaling)
+
+    self.compute_initial_state_guess((S @ state[:, None]).flatten(), time)
+    self.compute_initial_control_guess()
+
+    self.solve_time = 0
+
+    self.x0.value = np.array(state)[:, None]
+
+    # print("AAAA")
+    # print(self.x0.value)
+
+    # dynamics constraints
+    for _ in range(self.sqp_iters):
+      for i in range(self.N):
+        dt = self.dts[i]
+
+        prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
+        prev_input = (Winv @ self.prev_u[:, i][:, None]).flatten()
+
+        A, B, K = self.linearization(prev_state, prev_input, dt)
+
+        # print(i, dt, time + sum(self.dts[:i]))
+
+        # print(prev_state)
+        # print(prev_input)
+
+        # print(np.array(A))
+        # print(np.array(B))
+        # print(np.array(K))
+
+        self.As[i].value = np.array(A)
+        self.Bs[i].value = np.array(B)
+        self.Ks[i].value = np.array(K)
+
+      curr_time = time
+      for i in range(self.N): 
+        self.x_ref[i].value = self.ref(curr_time)
+
+        dt = self.dts[i]
+        curr_time += dt
+
+      # terminal cost
+      self.x_ref[-1].value = self.ref(curr_time)
+
+      # warm start
+      self.x.value = self.prev_x
+      self.u.value = self.prev_u
+
+      # The optimal objective value is returned by `prob.solve()`.
+      _ = self.problem.solve(solver='CLARABEL', max_iter=5000)
+      # result = self.problem.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
+
+      # _ = self.problem.solve(solver='SCS')
+      # _ = self.problem.solve(solver='OSQP', max_iter=5000)
+
+      # data, _, _= self.problem.get_problem_data(cp.OSQP)
+
+      # print(data)
+
+      # print("A")
+      # print(data['A'].todense())
+      # np.savetxt("foo2.csv", data["A"].todense(), delimiter=",")
+
+      # if time == 0.05:
+      #   print(self.u.value)
+      #   print(self.x.value)
+      #   return np.nan
+
+      if self.problem.status in ["infeasible", "unbounded"]:
+        infeasible_res = np.ones(self.sys.input_dim)
+        infeasible_res[0] = np.nan
+        return infeasible_res
       
-      if calculated_T < target_T:
-        alpha_min = alpha
+      # print("Sols")
+      # print(self.x.value)
+      # print(self.u.value)
+
+      # update solutions for linearization
+      # TODO: should really be a line search
+      if self.first_run:
+        self.prev_x = self.x.value
+        self.prev_u = self.u.value
       else:
-        alpha_max = alpha
+        self.prev_x = self.x.value * self.sqp_mixing + self.prev_x * (1 - self.sqp_mixing)
+        self.prev_u = self.u.value * self.sqp_mixing + self.prev_u * (1 - self.sqp_mixing)
+
+      # print('new prev vals')
+      # print(self.prev_x)
+      # print(self.prev_u)
+
+      self.first_run = False
+
+      self.solve_time += self.problem.solver_stats.solve_time
+
+    self.prev_t = time
+
+    if self.problem.status not in ["infeasible", "unbounded"]:
+      return Winv @ self.u.value[:, 0]
     
-    return alpha  # Return best approximation
-
-  alpha = solve_for_alpha(T, dt0, dt_max, steps)
-  print(alpha)
-
-  return [min(dt0 + i * alpha, dt_max) for i in range(steps)]
-
-def get_linear_spacing(dt0, T, steps):
-  alpha = 2 *(T - steps * dt0) / (steps * (steps-1))
-  return [dt0 + i * alpha for i in range(steps)]
-
-def get_linear_spacing_v2(dt0, T, steps):
-  alpha = 2 *(T-dt0 - (steps-1) * dt0) / ((steps-1) * (steps-2))
-  return [dt0] + [dt0 + i * alpha for i in range(steps)]
-
-def get_power_spacing(dt0, T, steps):
-  def solve_for_alpha(T, dt, N, max_iterations=100, tolerance=1e-6):
-    def f(alpha):
-      return dt * (((1 + alpha) ** (N + 1) - 1) / alpha) - T
-
-    def f_prime(alpha):
-      return dt * ((N + 1) * (1 + alpha)**N / alpha - ((1 + alpha)**(N + 1) - 1) / alpha**2)
-
-    # Initial guess
-    alpha = 0.1
-
-    for _ in range(max_iterations):
-      f_value = f(alpha)
-      if abs(f_value) < tolerance:
-          return alpha
-
-      f_prime_value = f_prime(alpha)
-      if f_prime_value == 0:
-          return None  # To avoid division by zero
-
-      alpha = alpha - f_value / f_prime_value
-
-    return None  # If no solution found within max_iterations
-  
-  alpha = solve_for_alpha(T, dt0, steps-1, 1000, 1e-6)
-  dts = [dt0 * (1+alpha)**i for i in range(steps)]
-
-  return dts
+    return np.zeros(self.sys.input_dim)
 
 class NU_NMPC(Controller):
   def __init__(self, system, dts, quadratic_cost, reference):
@@ -424,6 +670,25 @@ class NU_NMPC(Controller):
     self.prev_u = self.nmpc.prev_u
     
     return res
+
+class Parameterized_NU_NMPC(Controller):
+  def __init__(self, system, dts, quadratic_cost, reference):
+    self.nmpc = ParameterizedNMPC(system, len(dts), 0, quadratic_cost, reference)
+
+    self.nmpc.dts = dts
+
+  def setup_problem(self):
+    self.nmpc.setup_problem()
+
+  def compute(self, state, t):
+    res = self.nmpc.compute(state, t)
+
+    self.solve_time = self.nmpc.solve_time
+    self.prev_x = self.nmpc.prev_x
+    self.prev_u = self.nmpc.prev_u
+    
+    return res
+
 
 class MoveBlockingNMPC(Controller):
   def __init__(self, system, N, dt, quadratic_cost, reference, blocks):
@@ -933,23 +1198,9 @@ class NMPCC(Controller):
       # The optimal objective value is returned by `prob.solve()`.
       # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-8, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-4, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
-      # result = prob.solve(solver='OSQP', verbose=True,eps_abs=1e-7, eps_rel=1e-5, max_iter=10000)
-      # result = prob.solve(solver='ECOS', verbose=True, max_iters=1000, feastol=1e-5, reltol=1e-4, abstol_inacc=1e-5, reltol_inacc=1e-5, feastol_inacc=1e-5)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-4)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
-      # result = prob.solve(solver='PIQP', verbose=True)
       result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
-      # result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
-
-      # options_cvxopt = {
-      #     "max_iters": 5000,
-      #     "verbose": True,
-      #     "abstol": 1e-21,
-      #     "reltol": 1e-11,
-      #     "refinement": 2, # higher number seemed to make things worse
-      #     "kktsolver": "robust"
-      # }
-      # result = prob.solve(solver='CVXOPT', **options_cvxopt)
 
       end = time.process_time_ns()
 
