@@ -7,6 +7,8 @@ from controller import *
 from util import *
 from controller_util import *
 
+from analysis import *
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.transforms as transforms
@@ -2354,7 +2356,8 @@ def mpcc_amzracecar_test(track='fig8'):
   # plt.plot(dts)
   # plt.show()
 
-  nmpcc = NMPCC(sys, dts, mapping, ref)
+  # nmpcc = NMPCC(sys, dts, mapping, ref)
+  nmpcc = Parameterized_NMPCC(sys, dts, mapping, ref)
   nmpcc.state_scaling = state_scaling
   nmpcc.input_scaling = input_scaling
 
@@ -2597,7 +2600,7 @@ if __name__ == "__main__":
   # mpcc_test()
   # mpcc_jerk_test()
   # mpcc_racecar_test()
-  mpcc_amzracecar_test(track='race')
-  # mpcc_amzracecar_test(track='fig8')
+  # mpcc_amzracecar_test(track='race')
+  mpcc_amzracecar_test(track='fig8')
 
   plt.show()

@@ -35,8 +35,8 @@ def motivation_horizon():
   quadratic_cost = QuadraticCost(Q, R, Q)
 
   for N_steps in [5, 10, 20, 40, 60]:
-    nmpc = ParameterizedNMPC(sys, N_steps, dt, quadratic_cost, ref)
     # nmpc = NMPC(sys, N_steps, dt, quadratic_cost, ref)
+    nmpc = ParameterizedNMPC(sys, N_steps, dt, quadratic_cost, ref)
     nmpc.sqp_iters = 1
     nmpc.sqp_mixing = 1
 
@@ -45,8 +45,6 @@ def motivation_horizon():
 
     nmpc.state_scaling = state_scaling
     nmpc.input_scaling = input_scaling
-
-    nmpc.setup_problem()
 
     mpc_sol = eval(sys, nmpc, x0, T_sim, dt)
 
@@ -202,7 +200,6 @@ def make_cart_pole_animation():
   dts = get_linear_spacing(0.05, 1, 20)
   # nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
   nu_mpc = Parameterized_NU_NMPC(sys, dts, quadratic_cost, ref)
-  nu_mpc.setup_problem()
 
   nu_mpc_sol = eval(sys, nu_mpc, x, T_sim, dt)
 
@@ -445,20 +442,62 @@ def make_quadcopter_animation():
 def make_racecar_animation():
   pass
 
-
 solver_to_color_map = {
   "NMPC": "tab:blue",
   "NU_MPC_linear": "tab:orange",
   "NU_MPC_exp": "tab:green",
 }
 
-all_solvers = [
-  "NMPC",
-  "NU_MPC_linear",
-  # "NU_MPC_exp"
-]
+def plot_data_from_cost_comp(all_data, system_name, plot_normalized_data=True, save=True):
+  solvers = set(k for d in all_data for k in d)
 
-def make_masspoint_cost_comp_for_blog(num_runs=1):
+  plt.figure()
+  for solver_name in solvers:
+    times = []
+    costs = []
+
+    for data in all_data:
+      value = data[solver_name]
+      x = [value[i][1] for i in range(len(value))]
+      y = [value[i][2] for i in range(len(value))]
+      y_normalized = [value[i][-1] for i in range(len(value))]
+      
+      times.append(x)
+
+      if plot_normalized_data:
+        costs.append(y_normalized)
+      else:
+        costs.append(y)
+
+    median_times = np.median(times, axis=0)
+    median_costs = np.median(costs, axis=0)
+
+    plt.errorbar(median_times, median_costs,
+                 xerr=[median_times - np.min(times, axis=0), np.max(times, axis=0) - median_times], 
+                 yerr=[median_costs - np.min(costs, axis=0), np.max(costs, axis=0) - median_costs],
+                 label=solver_name, color=solver_to_color_map[solver_name],
+                 marker='o')
+
+  plt.xlabel("Solver time [s]")
+  plt.ylabel("Cost")
+  plt.legend()
+
+  if save:
+    plt.savefig(f'./img/blog/{system_name}_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
+
+  plt.figure()
+  for solver_name, value in data.items():
+    x = [value[i][1] for i in range(len(value))]
+    y = [value[i][2] for i in range(len(value))]
+
+    ks = [value[i][3] for i in range(len(value))]
+
+    plt.plot(ks, x, label=solver_name)
+
+  if save:
+    plt.savefig(f'./img/blog/{system_name}_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
+
+def make_masspoint_cost_comp_for_blog(num_runs=1, randomize_start_state=False):
   T_sim = 3
   dt_sim = 0.02
 
@@ -477,64 +516,36 @@ def make_masspoint_cost_comp_for_blog(num_runs=1):
 
   p = Problem(T_sim, dt_sim, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
 
+  solvers = [
+    "NMPC",
+    "NU_MPC_linear",
+    "NU_MPC_exp"
+  ]
+
   all_data = []
   for i in range(num_runs):
     print(i)
-    np.random.seed(i)
-    p.x0 = x0 + np.random.rand(3) * 0.1
+
+    if randomize_start_state:
+      np.random.seed(i)
+      p.x0 = x0 + np.random.rand(3) * 0.1
+
     # data = make_cost_computation_curve(p, ks = [5, 7, 10, 20, 30, 40], T_pred= 40 * dt_sim, noise=True)
-    data = make_cost_computation_curve(p, ks = [5, 10, 20, 30], T_pred= 40 * dt_sim, noise=False)
+    data = make_cost_computation_curve(p, solvers, ks = [5, 10, 20, 30], T_pred= 40 * dt_sim, noise=False)
     
     normalizing_cost = data["NMPC"][-1][2]
     normalized_data = data
     
-    for solver in all_solvers:
+    for solver in solvers:
       num_pts = len(normalized_data[solver])
       for i in range(num_pts):
-        normalized_data[solver][i][2] = normalized_data[solver][i][2] / normalizing_cost
+        normalized_data[solver][i].append(normalized_data[solver][i][2] / normalizing_cost)
     
     all_data.append(normalized_data)
 
-  plt.figure()
-  for solver_name in all_solvers:
-    times = []
-    costs = []
+  plot_data_from_cost_comp(all_data, "masspoint")
 
-    for data in all_data:
-      value = data[solver_name]
-      x = [value[i][1] for i in range(len(value))]
-      y = [value[i][2] for i in range(len(value))]
-      
-      times.append(x)
-      costs.append(y)
-
-    median_times = np.median(times, axis=0)
-    median_costs = np.median(costs, axis=0)
-
-    plt.errorbar(median_times, median_costs,
-                 xerr=[median_times - np.min(times, axis=0), np.max(times, axis=0) - median_times], 
-                 yerr=[median_costs - np.min(costs, axis=0), np.max(costs, axis=0) - median_costs],
-                 label=solver_name, color=solver_to_color_map[solver_name],
-                 marker='o')
-
-  plt.xlabel("Solver time [s]")
-  plt.ylabel("Cost")
-  plt.legend()
-
-  plt.savefig(f'./img/blog/masspoint_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
-
-  plt.figure()
-  for solver_name, value in data.items():
-    x = [value[i][1] for i in range(len(value))]
-    y = [value[i][2] for i in range(len(value))]
-
-    ks = [value[i][3] for i in range(len(value))]
-
-    plt.plot(ks, x, label=solver_name)
-
-  plt.savefig(f'./img/blog/masspoint_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
-
-def make_cartpole_cost_comp_for_blog(num_runs=1):
+def make_cartpole_cost_comp_for_blog(num_runs=1, randomize_start_state = False):
   T_sim = 4
   sys = Cartpole()
   x0 = np.zeros(4)
@@ -552,54 +563,42 @@ def make_cartpole_cost_comp_for_blog(num_runs=1):
 
   p = Problem(T_sim, dt, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
 
+  solvers = [
+    "NMPC",
+    "NU_MPC_linear",
+    "NU_MPC_exp"
+  ]
+
   all_data = []
-  for _ in range(num_runs):
-    data = make_cost_computation_curve(p, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
+  for i in range(num_runs):
+    print(i)
+
+    if randomize_start_state:
+      np.random.seed(i)
+      p.x0 = x0 + np.random.rand(sys.state_dim) * 0.5
+    
+    data = make_cost_computation_curve(p, solvers, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
+    # data = make_cost_computation_curve(p, ks = [5, 7], T_pred=1)
     # data = make_cost_computation_curve(p, ks = [3, 5, 7, 10, 12, 15, 20], T_pred=1)
-    all_data.append(data)
 
-  plt.figure()
-  for solver_name in all_solvers:
-    times = []
-    costs = []
+    normalizing_cost = data["NMPC"][-1][2]
+    normalized_data = data
+    
+    for solver in solvers:
+      num_pts = len(normalized_data[solver])
+      for i in range(num_pts):
+        normalized_data[solver][i].append(normalized_data[solver][i][2] / normalizing_cost)
 
-    for data in all_data:
-      value = data[solver_name]
-      x = [value[i][1] for i in range(len(value))]
-      y = np.array([value[i][2] for i in range(len(value))])
+        final_state = data[solver][i][4].states[-1]
+        if not (-np.cos(final_state[2]) > 0.8 and \
+                       abs(final_state[3]) < 0.5 and \
+                       abs(final_state[0]) < 1):
+          normalized_data[solver][i][-1] = 10
+          normalized_data[solver][i][2] = 10
 
-      mask = np.array([-np.cos(value[i][4].states[-1][2]) > 0.8 and \
-                       abs(value[i][4].states[-1][3]) < 0.5 and \
-                       abs(value[i][4].states[-1][0]) < 1 for i in range(len(value))])
-      y[~mask] = np.nan
+    all_data.append(normalized_data)
 
-      times.append(x)
-      costs.append(y)
-
-    median_times = np.median(times, axis=0)
-    median_costs = np.median(costs, axis=0)
-
-    plt.errorbar(median_times, median_costs,
-                 xerr=[median_times - np.min(times, axis=0), np.max(times, axis=0) - median_times], 
-                 label=solver_name, color=solver_to_color_map[solver_name],
-                 marker='o')
-
-  plt.xlabel("Solver time [s]")
-  plt.ylabel("Cost")
-  plt.legend()
-
-  plt.savefig(f'./img/blog/cartpole_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
-
-  plt.figure()
-  for solver_name, value in data.items():
-    x = [value[i][1] for i in range(len(value))]
-    y = [value[i][2] for i in range(len(value))]
-
-    ks = [value[i][3] for i in range(len(value))]
-
-    plt.plot(ks, x, label=solver_name)
-
-  plt.savefig(f'./img/blog/cartpole_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
+  plot_data_from_cost_comp(all_data, "cartpole")
 
 def make_double_cartpole_cost_comp_for_blog():
   T_sim = 4
@@ -625,7 +624,7 @@ def make_double_cartpole_cost_comp_for_blog():
   input_scaling = 1 / (np.array([50]))
   
   p = Problem(T_sim, dt, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
-  data = make_cost_computation_curve(p, ks = [10, 20, 40], T_pred=1)
+  data = make_cost_computation_curve(p, solvers, ks = [10, 20, 40], T_pred=1)
   # make_cost_computation_curve(p, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
 
   for solver_name, value in data.items():
@@ -661,7 +660,7 @@ def make_double_cartpole_cost_comp_for_blog():
 
   plt.savefig(f'./img/blog/double_cartpole_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
 
-def make_quadcopter_cost_comp_for_blog(num_runs=1):
+def make_quadcopter_cost_comp_for_blog(num_runs=1, randomize_start_state=False):
   T_sim = 3
 
   sys = Quadcopter2D()
@@ -695,50 +694,34 @@ def make_quadcopter_cost_comp_for_blog(num_runs=1):
   
   p = Problem(T_sim, dt, sys, x0, QuadraticCost(Q, R, Q), ref, state_scaling, input_scaling)
 
+  solvers = [
+    "NMPC",
+    "NU_MPC_linear",
+    "NU_MPC_exp"
+  ]
+
   all_data = []
-  for _ in range(num_runs):
+  for i in range(num_runs):
+    print(i)
+    if randomize_start_state:
+      np.random.seed(i)
+      p.x0 = x0 + np.random.rand(sys.state_dim) * 0.5
+
     # data = make_cost_computation_curve(p, ks = [5, 10, 20], T_pred=1)
-    data = make_cost_computation_curve(p, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
+    data = make_cost_computation_curve(p, solvers, ks = [5, 7, 10, 12, 15, 20], T_pred=1)
     all_data.append(data)
 
-  plt.figure()
-  for solver_name in all_solvers:
-    times = []
-    costs = []
+    normalizing_cost = data["NMPC"][-1][2]
+    normalized_data = data
+    
+    for solver in solvers:
+      num_pts = len(normalized_data[solver])
+      for i in range(num_pts):
+        normalized_data[solver][i].append(normalized_data[solver][i][2] / normalizing_cost)
+    
+    all_data.append(normalized_data)
 
-    for data in all_data:
-      value = data[solver_name]
-      x = [value[i][1] for i in range(len(value))]
-      y = [value[i][2] for i in range(len(value))]
-      
-      times.append(x)
-      costs.append(y)
-
-    median_times = np.median(times, axis=0)
-    median_costs = np.median(costs, axis=0)
-
-    plt.errorbar(median_times, median_costs,
-                 xerr=[median_times - np.min(times, axis=0), 
-                       np.max(times, axis=0) - median_times], 
-                 label=solver_name, color=solver_to_color_map[solver_name],
-                 marker='o')
-
-  plt.xlabel("Solver time [s]")
-  plt.ylabel("Cost")
-  plt.legend()
-
-  plt.savefig(f'./img/blog/quadcopter_cost_comp.png', format='png', dpi=300, bbox_inches = 'tight')
-
-  plt.figure()
-  for solver_name, value in data.items():
-    x = [value[i][1] for i in range(len(value))]
-    y = [value[i][2] for i in range(len(value))]
-
-    ks = [value[i][3] for i in range(len(value))]
-
-    plt.plot(ks, x, label=solver_name)
-
-  plt.savefig(f'./img/blog/quadcopter_compute_times.png', format='png', dpi=300, bbox_inches = 'tight')
+  plot_data_from_cost_comp(all_data, "quadcopter")
 
 def make_racecar_analysis(num_runs=1, track='fig8'):
   if track=='fig8':
@@ -798,7 +781,8 @@ def make_racecar_analysis(num_runs=1, track='fig8'):
         state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5, 1, 0.35]))
         input_scaling = 1 / (np.array([5, 3]))
 
-        nmpcc = NMPCC(sys, dts, mapping, ref)
+        # nmpcc = NMPCC(sys, dts, mapping, ref)
+        nmpcc = Parameterized_NMPCC(sys, dts, mapping, ref)
         nmpcc.state_scaling = state_scaling
         nmpcc.input_scaling = input_scaling
 
@@ -900,12 +884,14 @@ if __name__ == "__main__":
   # mpcc_amzracecar_test(track='race')
   # mpcc_amzracecar_test(track='fig8')
 
-  make_masspoint_cost_comp_for_blog(num_runs=100)
-  # make_quadcopter_cost_comp_for_blog(num_runs=5)
-  # make_cartpole_cost_comp_for_blog(num_runs=5)
+  # make_masspoint_cost_comp_for_blog(num_runs=1, randomize_start_state=True)
+  # make_quadcopter_cost_comp_for_blog(num_runs=100, randomize_start_state=True)
+  # make_cartpole_cost_comp_for_blog(num_runs=100, randomize_start_state=True)
+  
+  # not used in the blog
   # make_double_cartpole_cost_comp_for_blog()
 
-  # make_racecar_analysis(num_runs=3, track='fig8')
-  # make_racecar_analysis(num_runs=1, track='race')
+  make_racecar_analysis(num_runs=10, track='fig8')
+  make_racecar_analysis(num_runs=10, track='race')
 
   plt.show()

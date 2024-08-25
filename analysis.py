@@ -26,6 +26,8 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10, mpcc=False, noise
 
   fwd = jax.jit(lambda x, u, dt: system.step(x, u, dt, method="rk4"))
 
+  controller.setup()
+
   for j in range(int(T_sim / dt_sim)):
     # print("x0")
     # print(xn)
@@ -86,55 +88,13 @@ class Problem:
     self.state_scaling = state_scaling
     self.input_scaling = input_scaling
 
-def make_cost_computation_curve(problem, ks, T_pred=1, noise=False):
+def make_cost_computation_curve(problem, solvers, ks, T_pred=1, noise=False):
   # run controllers with given
   #  - initial conditions
   #  - weight matrices
   # for various T/k combinations
   # ideally, we would have a 3d plot
   # instead we just make a bunch of slices
-
-  if False:
-    ks = [5, 7, 10, 12, 15, 20]
-
-    T_sim = 3
-
-    sys = Quadcopter2D()
-
-    Q = np.diag([1, 1, 1, 0.01, 0.01, 0.01])
-    ref = np.zeros((6, 1))
-    R = np.diag([.01, .01])
-
-    x = np.zeros(6)
-    x[0] = 3
-    x[1] = 0
-    x[2] = np.pi
-    x[5] = -10
-
-    u = np.zeros(2) - 0
-    dt = 0.05
-
-    state_scaling = 1 / np.array([1., 1, 1, 10, 10, 10])
-    input_scaling = 1 / np.array([2, 2])
-  elif False:
-    T_sim = 3
-
-    # ks = [5, 7, 10, 12, 15, 20]
-    ks = [5, 7, 10]
-
-    sys = MasspointND(2)
-    x = np.zeros(4)
-    x[2] = 5
-    u = np.zeros(2)
-
-    Q = np.diag([1, 0, 1, 0])
-    ref = np.zeros((4, 1))
-    R = np.diag([.1, .1])
-
-    dt = 0.1
-
-    state_scaling = 1 / np.array([1, 1, 1, 1])
-    input_scaling = 1 / np.array([5, 5])
 
   T_sim = problem.T_sim
   sys = problem.sys
@@ -152,32 +112,35 @@ def make_cost_computation_curve(problem, ks, T_pred=1, noise=False):
 
   for T in [T_pred]:
     for k in ks:
-      # nmpc = NMPC(sys, k, T / k, quadratic_cost, ref)
-      nmpc = ParameterizedNMPC(sys, k, T / k, quadratic_cost, ref)
-      nmpc.state_scaling = state_scaling
-      nmpc.input_scaling = input_scaling
-      nmpc.setup_problem()
+      solvers_to_run = []
 
-      lin_dts = get_linear_spacing(dt, T, k)
-      # nu_mpc_lin = NU_NMPC(sys, lin_dts, quadratic_cost, ref)
-      nu_mpc_lin = Parameterized_NU_NMPC(sys, lin_dts, quadratic_cost, ref)
-      nu_mpc_lin.nmpc.state_scaling = state_scaling
-      nu_mpc_lin.nmpc.input_scaling = input_scaling
-      nu_mpc_lin.setup_problem()
+      if "NMPC" in solvers:
+        # nmpc = NMPC(sys, k, T / k, quadratic_cost, ref)
+        nmpc = ParameterizedNMPC(sys, k, T / k, quadratic_cost, ref)
+        nmpc.state_scaling = state_scaling
+        nmpc.input_scaling = input_scaling
 
-      # exp_dts = get_power_spacing(dt, T, k)
-      # nu_mpc_exp = NU_NMPC(sys, exp_dts, quadratic_cost, ref)
+        solvers_to_run.append(("NMPC", nmpc))
 
-      # nu_mpc_exp.nmpc.state_scaling = state_scaling
-      # nu_mpc_exp.nmpc.input_scaling = input_scaling
+      if "NU_MPC_linear" in solvers:
+        lin_dts = get_linear_spacing(dt, T, k)
+        # nu_mpc_lin = NU_NMPC(sys, lin_dts, quadratic_cost, ref)
+        nu_mpc_lin = Parameterized_NU_NMPC(sys, lin_dts, quadratic_cost, ref)
+        nu_mpc_lin.nmpc.state_scaling = state_scaling
+        nu_mpc_lin.nmpc.input_scaling = input_scaling
 
-      solvers = [
-        ("NMPC", nmpc), 
-        ("NU_MPC_linear", nu_mpc_lin), 
-        # ("NU_MPC_exp", nu_mpc_exp)
-      ]
+        solvers_to_run.append(("NU_MPC_linear", nu_mpc_lin))
 
-      for j, (name, solver) in enumerate(solvers):
+      if "NU_MPC_exp" in solvers:
+        exp_dts = get_power_spacing(dt, T, k)
+        nu_mpc_exp = Parameterized_NU_NMPC(sys, exp_dts, quadratic_cost, ref)
+
+        nu_mpc_exp.nmpc.state_scaling = state_scaling
+        nu_mpc_exp.nmpc.input_scaling = input_scaling
+  
+        solvers_to_run.append(("NU_MPC_exp", nu_mpc_exp))
+
+      for j, (name, solver) in enumerate(solvers_to_run):
         res = eval(sys, solver, x0, T_sim, dt, noise_on_obs=noise, noise_on_input=noise)
         # mpc_sol = eval(sys, nmpc, x0, T_sim, dt)
         # nu_mpc_lin_sol = eval(sys, nu_mpc_lin, x, T_sim, dt)

@@ -8,6 +8,7 @@ import time
 
 import cvxpy as cp
 from scipy.interpolate import interp1d, make_interp_spline
+import scipy.linalg
 
 from systems import MasspointND
 
@@ -15,8 +16,11 @@ class Controller:
   def __init__(self, system):
     self.system = system
 
+  def setup(self):
+    pass
+
   def compute(self, x):
-    raise NotImplementedError("Implement me pls")
+    raise NotImplementedError("Implement me pls.")
 
 class QuadraticCost:
   def __init__(self, Q, R, QN, q = None, qn=None, r=None):
@@ -123,10 +127,6 @@ class NMPC(Controller):
 
     if not self.first_run:
       print(self.prev_x[:, 0])
-    
-    print("state")
-    print(state)
-    print(self.prev_x)
 
     self.solve_time = 0
 
@@ -161,22 +161,6 @@ class NMPC(Controller):
             S @ B @ Winv @ u[:, idx][:, None] - S @ K
         )
 
-        # print(prev_state)
-        # print(prev_input)
-
-        # print("A")
-        # print(A)
-        # print(B)
-        # print(K)
-        # print("scaled a")
-        # print(S @ (I + A) @ Sinv )
-        # print(S @ B @ Winv)
-        # print("K")
-        # print(S @ K)
-        # print((S @ K))
-
-        # print(self.sys.f(prev_state, prev_input))
-
       constraints.append(x[:, 0][:, None] == S @ state[:, None])
 
       # input constraints
@@ -200,19 +184,11 @@ class NMPC(Controller):
           for i in range(self.N + 1):
             constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i*2][:, None])
             constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i*2+1][:, None])
-
-        # slack variables
-        # for i in range((self.N + 1)*2):
-        #   constraints.append(s[:, i] >= 0)
       else:
         if not self.first_run:
           for i in range(self.N + 1):
             constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
             constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
-
-      # print("lims")
-      # print(S @ self.sys.state_limits[:, 0][:, None])
-      # print(S @ self.sys.state_limits[:, 1][:, None])
 
       # trust region constraints
       # if k > 0:
@@ -226,10 +202,6 @@ class NMPC(Controller):
       QNs = Sinv @ self.cost.QN @ Sinv
 
       Rs = Winv @ self.cost.R @ Winv
-
-      # print('costs')
-      # print(Qs)
-      # print(Rs)
 
       # TODO: normalize cost by total prediction horizn?
       cost = 0
@@ -366,45 +338,9 @@ class NMPC(Controller):
 
     return np.zeros(self.sys.input_dim)
   
-class ParameterizedNMPC(Controller):
+class ParameterizedNMPC(NMPC):
   def __init__(self, system, N, dt, quadratic_cost, reference):
-    self.sys = system
-    self.N = N
-    self.dt = dt
-
-    self.cost = quadratic_cost
-
-    if callable(reference):
-      self.ref = reference
-    else:
-      self.ref = lambda t: reference
-
-    self.state_dim = self.sys.state_dim
-    self.input_dim = self.sys.input_dim
-
-    self.prev_x = []
-    self.prev_u = []
-
-    self.dts = [self.dt] * self.N
-    #self.dts = [self.dt + 0.005*(i+1) for i in range(self.N)]
-
-    self.input_scaling = np.array([1] * self.sys.input_dim)
-    self.state_scaling = np.array([1] * self.sys.state_dim)
-
-    # solver params
-    self.sqp_iters = 3
-    self.sqp_mixing = 0.8
-
-    self.first_run = True
-
-    self.linearization = jax.jit(self.sys.linearization)
-
-    self.constraints_with_slack = True
-
-    self.move_blocking = False
-    self.blocks = None
-
-    self.prev_t = 0
+    super().__init__(system, N, dt, quadratic_cost, reference)
 
     # parameters
     self.As = None
@@ -421,9 +357,7 @@ class ParameterizedNMPC(Controller):
 
     self.problem = None
 
-    # self.setup_problem()
-
-  def setup_problem(self):
+  def setup(self):
     self.x = cp.Variable((self.state_dim, self.N+1))
     self.u = cp.Variable((self.input_dim, self.N))
 
@@ -517,37 +451,6 @@ class ParameterizedNMPC(Controller):
 
     objective = cp.Minimize(cost)
     self.problem = cp.Problem(objective, constraints)
-
-  def compute_initial_state_guess(self, x, t):
-    if self.first_run:
-      for i in range(self.N+1):
-        self.prev_x.append(x)
-
-      self.prev_x = np.array(self.prev_x).T
-    else:
-      times = np.array([0] + list(np.cumsum(self.dts)))
-
-      # f = interp1d(times, self.prev_x, axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
-      f = interp1d(times, self.prev_x, kind='linear', axis=1, bounds_error=False, fill_value=self.prev_x[:, -1])
-      diff = t - self.prev_t
-      new_x = f(times + diff)
-      
-      self.prev_x = new_x
-      self.prev_x[:, 0] = x
-
-  def compute_initial_control_guess(self):
-    if self.first_run:
-      for _ in range(self.N):
-        self.prev_u.append(np.zeros(self.input_dim))
-
-      self.prev_u = np.array(self.prev_u).T
-    else:
-      times = np.array([0] + list(np.cumsum(self.dts[:-1])))
-
-      f = interp1d(times, self.prev_u, kind='zero', axis=1, bounds_error=False, fill_value=self.prev_u[:, -1])
-      new_u = f(times + self.dts[0])
-
-      self.prev_u = new_u
 
   def compute(self, state, time):
     S = np.diag(self.state_scaling)
@@ -677,8 +580,8 @@ class Parameterized_NU_NMPC(Controller):
 
     self.nmpc.dts = dts
 
-  def setup_problem(self):
-    self.nmpc.setup_problem()
+  def setup(self):
+    self.nmpc.setup()
 
   def compute(self, state, t):
     res = self.nmpc.compute(state, t)
@@ -688,7 +591,6 @@ class Parameterized_NU_NMPC(Controller):
     self.prev_u = self.nmpc.prev_u
     
     return res
-
 
 class MoveBlockingNMPC(Controller):
   def __init__(self, system, N, dt, quadratic_cost, reference, blocks):
@@ -963,6 +865,8 @@ class NMPCC(Controller):
     # state slack variables
     s = cp.Variable((self.state_dim, self.N+1))
 
+    progress_residual = cp.Variable((self.N + 1))
+
     # reference slack variables
     rs = cp.Variable((1, (self.N+1)))
 
@@ -997,6 +901,8 @@ class NMPCC(Controller):
       print(self.prev_x[:, 0])
 
     self.solve_time = 0
+
+    theta = self.project_state_to_progess(state, t)
 
     for k in range(self.sqp_iters):
       constraints = []
@@ -1045,7 +951,6 @@ class NMPCC(Controller):
           p[:, next_idx][:, None] == T @ A @ Tinv @ p[:, idx][:, None] + T @ B @ Tuinv @ up[:, idx][:, None] - T @ K
         )
       
-      theta = self.project_state_to_progess(state, t)
       constraints.append(p[0, 0] == T[0, 0] * theta)
 
       # input constraints
@@ -1113,6 +1018,9 @@ class NMPCC(Controller):
 
         # curr_time += dt
 
+      for i in range(0, self.N + 1):
+        constraints.append(progress_residual[i] == Tinv[0,0] * (p[0, i] - self.prev_p[0, i]))
+
       for i in range(1, self.N+1):
         dt = self.dts[i-1]
 
@@ -1161,7 +1069,7 @@ class NMPCC(Controller):
           cont = 0.5 * cont + 0.5 * cont.T
 
           cost += self.contouring_weight * dt * cp.quad_form(
-            (self.path(prev_progress[0]) + tangent * (Tinv[0,0] * p[0, i] - prev_progress[0])) - self.H @ Sinv @ x[:, i][:, None]
+            (self.path(prev_progress[0]) + tangent * (progress_residual[i])) - self.H @ Sinv @ x[:, i][:, None]
             , self.cont_weight * cont @ cont.T + self.lag_weight * lag @ lag.T + np.eye(lag.shape[0]) * 1e-3)
 
       for i in range(0, self.N):
@@ -1248,6 +1156,353 @@ class NMPCC(Controller):
       self.prev_t = t
 
       return Winv @ u.value[:, 0]
+      # return u.value[:, 0]
+
+    return np.zeros(self.sys.input_dim)
+  
+class Parameterized_NMPCC(NMPCC):
+  def __init__(self, system, dts, H, reference):
+    super().__init__(system, dts, H, reference)
+
+    # parameters
+    self.As = None
+    self.Bs = None
+    self.Ks = None
+
+    self.tangents = None
+    self.contouring_matrices = None
+    self.ref_progress_param = None
+    self.ref_pt = None
+
+    self.x_ref = None
+    self.x0 = None
+    self.p0 = None
+
+    # variables
+    self.x = None
+    self.u = None
+    
+    self.s = None
+    self.rs = None
+
+    self.p = None
+    self.up = None
+
+    self.progress_residual = None
+    self.state_residual = None
+
+    self.problem = None
+  
+  def setup(self):
+    self.x = cp.Variable((self.state_dim, self.N+1))
+    self.u = cp.Variable((self.input_dim, self.N))
+
+    self.progress_residual = cp.Variable((self.N+1))
+    self.state_residual = cp.Variable((2, self.N+1))
+
+    # state slack variables
+    self.s = cp.Variable((self.state_dim, self.N+1), nonneg=True)
+
+    # reference slack variables
+    self.rs = cp.Variable((1, (self.N+1)))
+
+    self.p = cp.Variable((2, self.N+1))
+    self.up = cp.Variable((1, self.N))
+
+    # parameters
+    self.As = [cp.Parameter((self.state_dim, self.state_dim)) for _ in range(self.N)]
+    self.Bs = [cp.Parameter((self.state_dim, self.input_dim)) for _ in range(self.N)]
+    self.Ks = [cp.Parameter((self.state_dim, 1)) for _ in range(self.N)]
+    self.x0 = cp.Parameter((self.state_dim, 1))
+    
+    self.p0 = cp.Parameter((1))
+    
+    self.x_ref = [cp.Parameter((self.state_dim, 1)) for _ in range(self.N + 1)]
+
+    self.contouring_matrices = [cp.Parameter((2,2), PSD=True) for _ in range(self.N + 1)]
+    self.tangents = [cp.Parameter((2, 1)) for _ in range(self.N+1)]
+
+    self.ref_pt = [cp.Parameter((2, 1)) for _ in range(self.N + 1)]
+    self.ref_progress_param = [cp.Parameter((1)) for _ in range(self.N + 1)]
+
+    # S @ x = x_norm
+    S = np.diag(self.state_scaling)
+    Sinv = np.diag(1 / self.state_scaling)
+
+    # W @ u = u_norm
+    W = np.diag(self.input_scaling)
+    Winv = np.diag(1 / self.input_scaling)
+
+    # T @ prog = p_norm
+    T = np.diag(self.progress_scaling)
+    Tinv = np.diag(1 / self.progress_scaling)
+
+    # Tu @ pu = pu_norm
+    Tu = np.diag(self.progress_acc_scaling)
+    Tuinv = np.diag(1 / self.progress_acc_scaling)
+
+    constraints = []
+    # dynamics constraints
+    for i in range(self.N):
+      idx = i
+      next_idx = i+1
+
+      constraints.append(
+        self.x[:, next_idx][:, None] == \
+          S @ (self.As[i]) @ Sinv @ self.x[:, idx][:, None] + 
+          S @ self.Bs[i] @ Winv @ self.u[:, idx][:, None] - 
+          S @ self.Ks[i]
+      )
+
+    constraints.append(self.x[:, 0][:, None] == S @ self.x0)
+
+    # add dynamics for progress
+    for i in range(self.N):
+      idx = i
+      next_idx = i+1
+
+      dt = self.dts[i]
+
+      # this is constant, independent of current state
+      A, B, K = self.progress_linearization(np.array([0., 0.]), np.array([0.]), dt)
+
+      constraints.append(
+        self.p[:, next_idx][:, None] == \
+          T @ A @ Tinv @ self.p[:, idx][:, None] + 
+          T @ B @ Tuinv @ self.up[:, idx][:, None] - 
+          T @ K
+      )
+
+    constraints.append(self.p[0, 0] == T[0, 0] * self.p0)
+
+    for i in range(1, self.N + 1):
+      constraints.append(self.progress_residual[i] == (Tinv[0,0] * self.p[0, i] - self.ref_progress_param[i]))
+      constraints.append(
+        self.state_residual[:, i][:, None] == self.ref_pt[i] + self.progress_residual[i] * self.tangents[i] - \
+            self.H @ Sinv @ self.x[:, i][:, None])
+
+    # input constraints
+    for i in range(self.N):
+      constraints.append(self.u[:, i][:, None] >= W @ self.sys.input_limits[:, 0][:, None])
+      constraints.append(self.u[:, i][:, None] <= W @ self.sys.input_limits[:, 1][:, None])
+
+    # progress constraints
+    for i in range(self.N):
+      constraints.append(self.up[:, i][:, None] >= Tu @ self.progress_input_bounds[:, 0][:, None])
+      constraints.append(self.up[:, i][:, None] <= Tu @ self.progress_input_bounds[:, 1][:, None])
+  
+    for i in range(self.N+1):
+      constraints.append(self.p[:, i][:, None] >= T @ self.progress_bounds[:, 0][:, None])
+      constraints.append(self.p[:, i][:, None] <= T @ self.progress_bounds[:, 1][:, None])
+
+    # if self.move_blocking:
+    #   idx = 0
+    #   for block_len in self.blocks:
+    #     if block_len > 1:
+    #       for i in range(1, block_len):
+    #         constraints.append(self.u[:, idx] == self.u[:, idx + i])
+    #         print(idx, idx + i)
+        
+    #     idx += block_len
+
+    # state constraints
+    if self.state_constraints_with_slack:
+      # if not self.first_run:
+      for i in range(self.N + 1):
+        constraints.append(self.x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - self.s[:, i][:, None])
+        constraints.append(self.x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + self.s[:, i][:, None])
+    else:
+      # if not self.first_run:
+      for i in range(self.N + 1):
+        constraints.append(self.x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
+        constraints.append(self.x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
+
+    if self.track_constraints:
+      for i in range(1, self.N+1):
+        # self.ref_pt
+        residual = self.H @ Sinv @ self.x[:, i][:, None] - self.ref_pt[i]
+
+        if self.track_constraints_with_slack:
+          constraints.append(cp.sum_squares(residual) <= self.diff_from_center**2 + self.rs[0, i])
+          constraints.append(self.rs[0, i] >= 0)
+        else:
+          constraints.append(cp.sum_squares(residual) <= self.diff_from_center**2)
+
+    cost = 0
+
+    # TODO: normalize cost by total prediction horizn?
+    Rs = self.input_reg * Winv @ np.eye(self.input_dim) @ Winv
+
+    # curr_time = t
+    for i in range(self.N): 
+      dt = self.dts[i]
+      cost += dt * cp.quad_form(self.u[:,i][:, None], Rs)
+      cost += dt * self.progress_acc_reg * Tuinv[0, 0]**2 * self.up[0, i]**2
+
+      # curr_time += dt
+
+    for i in range(1, self.N+1):
+      dt = self.dts[i-1]
+
+      # cost += self.contouring_weight * dt * cp.quad_form(
+      #   self.ref_pt[i] + self.progress_residual[i] * self.tangents[i] - \
+      #       self.H @ Sinv @ self.x[:, i][:, None]
+      #   , self.contouring_matrices[i])
+
+      cost += self.contouring_weight * dt * cp.sum_squares(self.contouring_matrices[i] @
+        self.state_residual[:, i][:, None]
+        )
+
+    for i in range(0, self.N):
+      dt = self.dts[i]
+      cost -= dt * self.progress_weight * Tinv[1, 1] * self.p[1, i]
+
+    # slack variables
+    if self.state_constraints_with_slack:
+      for i in range(self.N):
+        dt = self.dts[i]
+        cost += dt * 10 * cp.sum(self.s[:, (i+1)])
+        cost += dt * 500 * cp.sum_squares(self.s[:, (i+1)])
+
+    if self.track_constraints and self.track_constraints_with_slack:
+      for i in range(self.N):
+        dt = self.dts[i]
+        cost += dt * self.track_constraint_linear_weight * cp.sum(self.rs[0, (i+1)])
+        cost += dt * self.track_constraint_quadratic_weight * cp.sum_squares(self.rs[0, (i+1)])
+
+    objective = cp.Minimize(cost)
+    self.problem = cp.Problem(objective, constraints)
+
+    print("Is DPP? ", self.problem.is_dcp(dpp=True))
+    print("Is DCP? ", self.problem.is_dcp(dpp=False))
+
+  def compute(self, state, t):
+    # S @ x = x_norm
+    S = np.diag(self.state_scaling)
+    Sinv = np.diag(1 / self.state_scaling)
+
+    # W @ u = u_norm
+    W = np.diag(self.input_scaling)
+    Winv = np.diag(1 / self.input_scaling)
+
+    # T @ prog = p_norm
+    T = np.diag(self.progress_scaling)
+    Tinv = np.diag(1 / self.progress_scaling)
+
+    # Tu @ pu = pu_norm
+    Tu = np.diag(self.progress_acc_scaling)
+    Tuinv = np.diag(1 / self.progress_acc_scaling)
+
+    self.compute_initial_state_guess((S @ state[:, None]).flatten(), t)
+    self.compute_initial_control_guess(t)
+
+    self.compute_initial_progress_guess(state, T, t)
+    self.compute_initial_progress_input_guess(t)
+
+    self.solve_time = 0
+
+    theta = self.project_state_to_progess(state, t)
+    print(theta)
+    self.p0.value = np.array([theta])
+    self.x0.value = np.array(state)[:, None]
+
+    for k in range(self.sqp_iters):
+      # dynamics constraints
+      for i in range(self.N):
+        dt = self.dts[i]
+        print(i, dt, t + np.sum(self.dts[:i]))
+
+        # this should be shifted by one step
+        prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
+        prev_input = (Winv @ self.prev_u[:, i][:, None]).flatten()
+
+        A, B, K = self.linearization(prev_state, prev_input, dt)
+
+        self.As[i].value = np.array(A)
+        self.Bs[i].value = np.array(B)
+        self.Ks[i].value = np.array(K)
+
+      for i in range(0, self.N+1):
+        self.ref_pt[i].value = self.path(Tinv[0,0]*self.prev_p[0, i])
+        self.ref_progress_param[i].value = np.array([Tinv[0,0]*self.prev_p[0, i]])
+
+      for i in range(1, self.N+1):
+        dt = self.dts[i-1]
+
+        # quadratize error
+        prev_progress = (Tinv @ self.prev_p[:, i][:, None]).flatten()
+
+        tangent = self.path_derivative(prev_progress[0])
+        tangent_norm = tangent / np.linalg.norm(tangent)
+        lag = tangent_norm @ tangent_norm.T
+        lag = 0.5 * lag + 0.5 * lag.T
+
+        cont = np.eye(len(tangent_norm)) - lag
+        cont = 0.5 * cont + 0.5 * cont.T
+
+        self.tangents[i].value = tangent
+        self.contouring_matrices[i].value = scipy.linalg.sqrtm(
+          self.lag_weight * lag @ lag.T + \
+            self.cont_weight * cont @ cont.T + np.eye(2) * 1e-3)
+
+      # warm start
+      self.x.value = self.prev_x
+      self.u.value = self.prev_u
+
+      start = time.process_time_ns()
+      # The optimal objective value is returned by `prob.solve()`.
+      # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-8, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-4, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
+      # result = prob.solve(solver='SCS', verbose=True, eps=1e-4)
+      # result = prob.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
+      _ = self.problem.solve(solver='CLARABEL', verbose=True, max_iter=500)
+
+      end = time.process_time_ns()
+
+      print("Sols")
+      print(self.x.value)
+      print(self.u.value)
+
+      # update solutions for linearization
+      # TODO: should really be a line search
+      if self.first_run:
+        self.prev_x = self.x.value
+        self.prev_u = self.u.value
+
+        self.prev_p = self.p.value
+        self.prev_up = self.up.value
+      else:
+        self.prev_x = self.x.value * self.sqp_mixing + self.prev_x * (1 - self.sqp_mixing)
+        self.prev_u = self.u.value * self.sqp_mixing + self.prev_u * (1 - self.sqp_mixing)
+
+        self.prev_p = self.p.value * self.sqp_mixing + self.prev_p * (1 - self.sqp_mixing)
+        self.prev_up = self.up.value * self.sqp_mixing + self.prev_up * (1 - self.sqp_mixing)
+
+      self.first_run = False
+
+      # self.solve_time += prob.solver_stats.solve_time
+      self.solve_time += (end - start) / 1e9
+
+      # data, _, _= prob.get_problem_data(cp.OSQP)
+
+      # print(data)
+
+      # print("A")
+      # print(data['A'].todense())
+      # np.savetxt("foo.csv", data["A"].todense(), delimiter=",")
+
+      # print("B")
+      # print(data['b'])
+      print('progress', self.p.value[:, -1])
+
+    if self.problem.status not in ["infeasible", "unbounded"]:
+      print("U")
+      print(self.u.value[:, 0])
+      print( Winv @ self.u.value[:, 0])
+
+      self.prev_t = t
+
+      return Winv @ self.u.value[:, 0]
       # return u.value[:, 0]
 
     return np.zeros(self.sys.input_dim)
