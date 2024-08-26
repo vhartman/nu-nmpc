@@ -63,7 +63,8 @@ class NMPC(Controller):
 
     self.first_run = True
 
-    self.linearization = jax.jit(self.sys.linearization)
+    self.linearization = self.sys.jitted_linearization
+    self.vmap_linearization = jax.jit(jax.vmap(self.sys.linearization, in_axes=(1, 1, 0)))
 
     self.constraints_with_slack = True
 
@@ -143,8 +144,8 @@ class NMPC(Controller):
         print(i, dt, t + sum(self.dts[:i]))
 
         # this should be shifted by one step
-        prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
-        prev_input = (Winv @ self.prev_u[:, i][:, None]).flatten()
+        prev_state = (Sinv @ self.prev_x[:, i, np.newaxis]).flatten()
+        prev_input = (Winv @ self.prev_u[:, i, np.newaxis]).flatten()
 
         # print("state")
         # print(prev_state)
@@ -156,17 +157,17 @@ class NMPC(Controller):
         A, B, K = self.linearization(prev_state, prev_input, dt)
 
         constraints.append(
-            x[:, next_idx][:, None] == 
-            S @ A @ Sinv @ x[:, idx][:, None] + 
-            S @ B @ Winv @ u[:, idx][:, None] - S @ K
+            x[:, next_idx, np.newaxis] == 
+            S @ A @ Sinv @ x[:, idx, np.newaxis] + 
+            S @ B @ Winv @ u[:, idx, np.newaxis] - S @ K
         )
 
-      constraints.append(x[:, 0][:, None] == S @ state[:, None])
+      constraints.append(x[:, 0, np.newaxis] == S @ state[:, None])
 
       # input constraints
       for i in range(self.N):
-        constraints.append(u[:, i][:, None] >= W @ self.sys.input_limits[:, 0][:, None])
-        constraints.append(u[:, i][:, None] <= W @ self.sys.input_limits[:, 1][:, None])
+        constraints.append(u[:, i, np.newaxis] >= W @ self.sys.input_limits[:, 0, np.newaxis])
+        constraints.append(u[:, i, np.newaxis] <= W @ self.sys.input_limits[:, 1, np.newaxis])
 
       if self.move_blocking:
         idx = 0
@@ -182,13 +183,13 @@ class NMPC(Controller):
       if self.constraints_with_slack:
         if True or not self.first_run:
           for i in range(self.N + 1):
-            constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i*2][:, None])
-            constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i*2+1][:, None])
+            constraints.append(x[:, i, np.newaxis] >= S @ self.sys.state_limits[:, 0, np.newaxis] - s[:, i*2, np.newaxis])
+            constraints.append(x[:, i, np.newaxis] <= S @ self.sys.state_limits[:, 1, np.newaxis] + s[:, i*2+1, np.newaxis])
       else:
         if not self.first_run:
           for i in range(self.N + 1):
-            constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
-            constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
+            constraints.append(x[:, i, np.newaxis] >= S @ self.sys.state_limits[:, 0, np.newaxis])
+            constraints.append(x[:, i, np.newaxis] <= S @ self.sys.state_limits[:, 1, np.newaxis])
 
       # trust region constraints
       # if k > 0:
@@ -209,8 +210,8 @@ class NMPC(Controller):
       for i in range(self.N): 
         dt = self.dts[i]
         x_ref = self.ref(curr_time)
-        cost += dt * cp.quad_form((x[:, i] [:, None] - S @ x_ref), Qs)
-        cost += dt * cp.quad_form(u[:,i][:, None], Rs)
+        cost += dt * cp.quad_form((x[:, i, np.newaxis] - S @ x_ref), Qs)
+        cost += dt * cp.quad_form(u[:, i, np.newaxis], Rs)
 
         curr_time += dt
 
@@ -218,7 +219,7 @@ class NMPC(Controller):
 
       # terminal cost
       x_ref = self.ref(curr_time)
-      cost += cp.quad_form((x[:, -1] [:, None] - S @ x_ref), QNs)
+      cost += cp.quad_form((x[:, -1, np.newaxis] - S @ x_ref), QNs)
 
       # cost = cost * 10
       # cost = cost / 1000
@@ -255,7 +256,7 @@ class NMPC(Controller):
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-2)
 
-      result = prob.solve(solver='CLARABEL', verbose=True, max_iter=5000)
+      result = prob.solve(solver='CLARABEL', max_iter=5000)
       # result = prob.solve(solver='QPALM', verbose=True, max_iter=5000)
 
       # data, _, _= prob.get_problem_data(cp.CLARABEL)
@@ -265,29 +266,10 @@ class NMPC(Controller):
       # print("A")
       # print(data['A'].todense())
 
-      # if t == 0.05:
-      #   print(u.value)
-      #   print(x.value)
-      #   return np.nan
-
-      # options_cvxopt = {
-      #     "max_iters": 5000,
-      #     "verbose": True,
-      #     "abstol": 1e-21,
-      #     "reltol": 1e-11,
-      #     "refinement": 2, # higher number seemed to make things worse
-      #     "kktsolver": "robust"
-      # }
-      # result = prob.solve(solver='CVXOPT', **options_cvxopt)
-
       if prob.status in ["infeasible", "unbounded"]:
         infeasible_res = np.ones(self.sys.input_dim)
         infeasible_res[0] = np.nan
         return infeasible_res
-
-      # print("Sols")
-      # print(x.value)
-      # print(u.value)
 
       # update solutions for linearization
       # TODO: should really be a line search
@@ -314,17 +296,6 @@ class NMPC(Controller):
       # self.solve_time += (lin_sys_time + cone_time + accel_time + setup_time) / 1000
 
       # self.solve_time += (end - start) / 1e9
-
-      # data, _, _= prob.get_problem_data(cp.CLARABEL)
-
-      # print(data)
-
-      # print("A")
-      # print(data['A'].todense())
-      # np.savetxt("foo.csv", data["A"].todense(), delimiter=",")
-
-      # print("B")
-      # print(data['b'])
 
     self.prev_t = t
 
@@ -366,9 +337,18 @@ class ParameterizedNMPC(NMPC):
     self.As = [cp.Parameter((self.state_dim, self.state_dim)) for _ in range(self.N)]
     self.Bs = [cp.Parameter((self.state_dim, self.input_dim)) for _ in range(self.N)]
     self.Ks = [cp.Parameter((self.state_dim, 1)) for _ in range(self.N)]
+
+    for i in range(self.N):
+      self.As[i].value = np.zeros((self.state_dim, self.state_dim))
+      self.Bs[i].value = np.zeros((self.state_dim, self.input_dim))
+      self.Ks[i].value = np.zeros((self.state_dim, 1))
+
     self.x0 = cp.Parameter((self.state_dim, 1))
     
     self.x_ref = [cp.Parameter((self.state_dim, 1)) for _ in range(self.N + 1)]
+
+    for i in range(self.N + 1):
+      self.x_ref[i].value = np.zeros((self.state_dim, 1))
 
     S = np.diag(self.state_scaling)
     Sinv = np.diag(1 / self.state_scaling)
@@ -382,40 +362,40 @@ class ParameterizedNMPC(NMPC):
       next_idx = i+1
 
       constraints.append(
-          self.x[:, next_idx][:, None] == 
-            S @ self.As[i] @ Sinv @ self.x[:, idx][:, None] + 
-            S @ self.Bs[i] @ Winv @ self.u[:, idx][:, None] - S @ self.Ks[i]
+          self.x[:, next_idx, np.newaxis] == 
+            S @ self.As[i] @ Sinv @ self.x[:, idx, np.newaxis] + 
+            S @ self.Bs[i] @ Winv @ self.u[:, idx, np.newaxis] - S @ self.Ks[i]
       )
 
-    constraints.append(self.x[:, 0][:, None] == S @ self.x0)
+    constraints.append(self.x[:, 0, np.newaxis] == S @ self.x0)
 
     # input constraints
     for i in range(self.N):
-      constraints.append(self.u[:, i][:, None] >= W @ self.sys.input_limits[:, 0][:, None])
-      constraints.append(self.u[:, i][:, None] <= W @ self.sys.input_limits[:, 1][:, None])
+      constraints.append(self.u[:, i, np.newaxis] >= W @ self.sys.input_limits[:, 0][:, None])
+      constraints.append(self.u[:, i, np.newaxis] <= W @ self.sys.input_limits[:, 1][:, None])
 
-    # if self.move_blocking:
-    #   idx = 0
-    #   for block_len in self.blocks:
-    #     if block_len > 1:
-    #       for i in range(1, block_len):
-    #         constraints.append(self.u[:, idx] == self.u[:, idx + i])
+    if self.move_blocking:
+      idx = 0
+      for block_len in self.blocks:
+        if block_len > 1:
+          for i in range(1, block_len):
+            constraints.append(self.u[:, idx] == self.u[:, idx + i])
         
-    #     idx += block_len
+        idx += block_len
 
     # state constraints
     if self.constraints_with_slack:
       for i in range(self.N + 1):
-        constraints.append(self.x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - self.s[:, i*2][:, None])
-        constraints.append(self.x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + self.s[:, i*2+1][:, None])
+        constraints.append(self.x[:, i, np.newaxis] >= S @ self.sys.state_limits[:, 0][:, None] - self.s[:, i*2][:, None])
+        constraints.append(self.x[:, i, np.newaxis] <= S @ self.sys.state_limits[:, 1][:, None] + self.s[:, i*2+1][:, None])
 
       # slack variables
       # for i in range((self.N + 1)*2):
       #   constraints.append(self.s[:, i] >= 0)
     else:
       for i in range(self.N + 1):
-        constraints.append(self.x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None])
-        constraints.append(self.x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None])
+        constraints.append(self.x[:, i, np.newaxis] >= S @ self.sys.state_limits[:, 0][:, None])
+        constraints.append(self.x[:, i, np.newaxis] <= S @ self.sys.state_limits[:, 1][:, None])
 
     # trust region constraints
     # if k > 0:
@@ -433,11 +413,11 @@ class ParameterizedNMPC(NMPC):
     cost = 0
     for i in range(self.N): 
       dt = self.dts[i]
-      cost += dt * cp.quad_form((self.x[:, i] [:, None] - S @ self.x_ref[i]), Qs)
-      cost += dt * cp.quad_form(self.u[:,i][:, None], Rs)
+      cost += dt * cp.quad_form((self.x[:, i, np.newaxis] - S @ self.x_ref[i]), Qs)
+      cost += dt * cp.quad_form(self.u[:,i, np.newaxis], Rs)
 
     # terminal cost
-    cost += cp.quad_form((self.x[:, -1] [:, None] - S @ self.x_ref[self.N]), QNs)
+    cost += cp.quad_form((self.x[:, -1, np.newaxis] - S @ self.x_ref[self.N]), QNs)
 
     # slack variables
     if self.constraints_with_slack:
@@ -452,14 +432,72 @@ class ParameterizedNMPC(NMPC):
     objective = cp.Minimize(cost)
     self.problem = cp.Problem(objective, constraints)
 
-  def compute(self, state, time):
+  def vectorized_linearization(self, Sinv, Winv):
+    # Convert inputs to jax arrays if they aren't already
+    # start_einsum = time.process_time_ns()
+
+    # prev_x = np.array(self.prev_x[:, :-1])
+    # prev_u = np.array(self.prev_u)
+    # prev_x = self.prev_x[:, :-1]
+    # prev_u = self.prev_u
+
+    # Compute prev_states and prev_inputs for all iterations at once
+
+    # prev_states_tmp = jnp.einsum('ij,jk->ik', Sinv, prev_x)
+    # prev_inputs_tmp = jnp.einsum('ij,jk->ik', Winv, prev_u)
+
+    prev_states = Sinv @ self.prev_x[:, :-1]
+    prev_inputs = Winv @ self.prev_u
+
+    # print(prev_states - prev_states_tmp)
+    # print(prev_inputs - prev_inputs_tmp)
+
+    # end_einsum = time.process_time_ns()
+    # print('einsum', end_einsum - start_einsum)
+
+    # Vectorize the linearization function
+    # self.vmap_linearization = jax.jit(jax.vmap(self.sys.linearization, in_axes=(1, 1, 0)))
+
+    # Apply the vectorized function
+    # start_lin = time.process_time_ns()
+
+    As, Bs, Ks = self.vmap_linearization(prev_states, prev_inputs, jnp.array(self.dts))
+
+    # end_lin = time.process_time_ns()
+    # print('vmap_lin', end_lin - start_lin)
+
+    # Update the values
+    # start_assign = time.process_time_ns()
+
+    As_array = np.array(As)
+    Bs_array = np.array(Bs)
+    Ks_array = np.array(Ks)
+
+    for i in range(self.N):
+      self.As[i].value[:, :] = As_array[i]
+      self.Bs[i].value[:, :] = Bs_array[i]
+      self.Ks[i].value[:, :] = Ks_array[i]
+
+      # print(self.As[i].value[:, :] )
+      # print(As_array[i])
+
+      # print(self.Bs[i].value[:, :] )
+      # print(Bs_array[i])
+
+      # print(self.Bs[i].value[:, :] )
+      # print(Bs_array[i])
+
+    # end_assign = time.process_time_ns()
+    # print('assign', end_assign - start_assign)
+
+  def compute(self, state, t0):
     S = np.diag(self.state_scaling)
     Sinv = np.diag(1 / self.state_scaling)
 
     W = np.diag(self.input_scaling)
     Winv = np.diag(1 / self.input_scaling)
 
-    self.compute_initial_state_guess((S @ state[:, None]).flatten(), time)
+    self.compute_initial_state_guess((S @ state[:, None]).flatten(), t0)
     self.compute_initial_control_guess()
 
     self.solve_time = 0
@@ -471,13 +509,16 @@ class ParameterizedNMPC(NMPC):
 
     # dynamics constraints
     for _ in range(self.sqp_iters):
+      # print("setting up")
+      # start_setup = time.process_time_ns()
+
       for i in range(self.N):
         dt = self.dts[i]
 
-        prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
-        prev_input = (Winv @ self.prev_u[:, i][:, None]).flatten()
+        prev_state = (Sinv @ self.prev_x[:, i, np.newaxis]).flatten()
+        prev_input = (Winv @ self.prev_u[:, i, np.newaxis]).flatten()
 
-        A, B, K = self.linearization(prev_state, prev_input, dt)
+        A, B, K = self.sys.jitted_linearization(prev_state, prev_input, dt)
 
         # print(i, dt, time + sum(self.dts[:i]))
 
@@ -488,27 +529,37 @@ class ParameterizedNMPC(NMPC):
         # print(np.array(B))
         # print(np.array(K))
 
-        self.As[i].value = np.array(A)
-        self.Bs[i].value = np.array(B)
-        self.Ks[i].value = np.array(K)
+        self.As[i].value[:, :] = np.array(A)
+        self.Bs[i].value[:, :] = np.array(B)
+        self.Ks[i].value[:, :] = np.array(K)
 
-      curr_time = time
+      # self.vectorized_linearization(Sinv, Winv)
+
+      curr_time = t0
       for i in range(self.N): 
-        self.x_ref[i].value = self.ref(curr_time)
+        self.x_ref[i].value[:,:] = self.ref(curr_time)
 
         dt = self.dts[i]
         curr_time += dt
 
       # terminal cost
-      self.x_ref[-1].value = self.ref(curr_time)
+      self.x_ref[-1].value[:, :] = self.ref(curr_time)
+
+      # end_setup = time.process_time_ns()
 
       # warm start
       self.x.value = self.prev_x
       self.u.value = self.prev_u
 
+      # print("solving")
+      # start_solve = time.process_time_ns()
       # The optimal objective value is returned by `prob.solve()`.
       _ = self.problem.solve(solver='CLARABEL', max_iter=5000)
       # result = self.problem.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
+      # end_solve = time.process_time_ns()
+
+      # print(end_setup - start_setup)
+      # print(end_solve - start_solve)
 
       # _ = self.problem.solve(solver='SCS')
       # _ = self.problem.solve(solver='OSQP', max_iter=5000)
@@ -530,10 +581,6 @@ class ParameterizedNMPC(NMPC):
         infeasible_res = np.ones(self.sys.input_dim)
         infeasible_res[0] = np.nan
         return infeasible_res
-      
-      # print("Sols")
-      # print(self.x.value)
-      # print(self.u.value)
 
       # update solutions for linearization
       # TODO: should really be a line search
@@ -544,15 +591,11 @@ class ParameterizedNMPC(NMPC):
         self.prev_x = self.x.value * self.sqp_mixing + self.prev_x * (1 - self.sqp_mixing)
         self.prev_u = self.u.value * self.sqp_mixing + self.prev_u * (1 - self.sqp_mixing)
 
-      # print('new prev vals')
-      # print(self.prev_x)
-      # print(self.prev_u)
-
       self.first_run = False
 
       self.solve_time += self.problem.solver_stats.solve_time
 
-    self.prev_t = time
+    self.prev_t = t0
 
     if self.problem.status not in ["infeasible", "unbounded"]:
       return Winv @ self.u.value[:, 0]
@@ -622,7 +665,7 @@ class NMPCC(Controller):
     self.H = H
 
     self.sys = system
-    self.linearization = jax.jit(self.sys.linearization)
+    self.linearization = self.sys.jitted_linearization
 
     # make spline approximation of reference path
     if callable(reference):
@@ -637,7 +680,7 @@ class NMPCC(Controller):
     self.path_second_derivative = self.path.derivative(2)
 
     self.progress_system = MasspointND(1)
-    self.progress_linearization = jax.jit(self.progress_system.linearization)
+    self.progress_linearization = self.progress_system.jitted_linearization
 
     self.state_dim = self.sys.state_dim
     self.input_dim = self.sys.input_dim
@@ -744,8 +787,6 @@ class NMPCC(Controller):
     min_error = 1e6
     theta_best = 0
     max_diff = self.progress_bounds[1,1] * diff
-
-    print(max_diff)
 
     for t in np.linspace(0, 20, 1000):
       e = self.error(state, t)
@@ -944,9 +985,6 @@ class NMPCC(Controller):
 
         A, B, K = self.progress_linearization(prev_progress, prev_input, dt)
 
-        # print(A)
-        # print(B)
-
         constraints.append(
           p[:, next_idx][:, None] == T @ A @ Tinv @ p[:, idx][:, None] + T @ B @ Tuinv @ up[:, idx][:, None] - T @ K
         )
@@ -979,10 +1017,10 @@ class NMPCC(Controller):
 
       # state constraints
       if self.state_constraints_with_slack:
-        if not self.first_run:
-          for i in range(self.N + 1):
-            constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i][:, None])
-            constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i][:, None])
+        # if not self.first_run:
+        for i in range(self.N + 1):
+          constraints.append(x[:, i][:, None] >= S @ self.sys.state_limits[:, 0][:, None] - s[:, i][:, None])
+          constraints.append(x[:, i][:, None] <= S @ self.sys.state_limits[:, 1][:, None] + s[:, i][:, None])
 
         # slack variables
         for i in range((self.N + 1)):
@@ -1018,7 +1056,7 @@ class NMPCC(Controller):
 
         # curr_time += dt
 
-      for i in range(0, self.N + 1):
+      for i in range(1, self.N + 1):
         constraints.append(progress_residual[i] == Tinv[0,0] * (p[0, i] - self.prev_p[0, i]))
 
       for i in range(1, self.N+1):
@@ -1108,13 +1146,9 @@ class NMPCC(Controller):
       # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-4, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-4)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
-      result = prob.solve(solver='CLARABEL', verbose=True, max_iter=500)
+      result = prob.solve(solver='CLARABEL', max_iter=500)
 
       end = time.process_time_ns()
-
-      print("Sols")
-      print(x.value)
-      print(u.value)
 
       # update solutions for linearization
       # TODO: should really be a line search
@@ -1214,6 +1248,11 @@ class Parameterized_NMPCC(NMPCC):
     self.Bs = [cp.Parameter((self.state_dim, self.input_dim)) for _ in range(self.N)]
     self.Ks = [cp.Parameter((self.state_dim, 1)) for _ in range(self.N)]
     self.x0 = cp.Parameter((self.state_dim, 1))
+
+    for i in range(self.N):
+      self.As[i].value = np.zeros((self.state_dim, self.state_dim))
+      self.Bs[i].value = np.zeros((self.state_dim, self.input_dim))
+      self.Ks[i].value = np.zeros((self.state_dim, 1))
     
     self.p0 = cp.Parameter((1))
     
@@ -1224,6 +1263,12 @@ class Parameterized_NMPCC(NMPCC):
 
     self.ref_pt = [cp.Parameter((2, 1)) for _ in range(self.N + 1)]
     self.ref_progress_param = [cp.Parameter((1)) for _ in range(self.N + 1)]
+
+    for i in range(self.N+1):
+      self.contouring_matrices[i].value = np.zeros((2, 2))
+      self.tangents[i].value = np.zeros((2, 1))
+      self.ref_pt[i].value = np.zeros((2, 1))
+      self.ref_progress_param[i].value = np.zeros((1))
 
     # S @ x = x_norm
     S = np.diag(self.state_scaling)
@@ -1295,15 +1340,15 @@ class Parameterized_NMPCC(NMPCC):
       constraints.append(self.p[:, i][:, None] >= T @ self.progress_bounds[:, 0][:, None])
       constraints.append(self.p[:, i][:, None] <= T @ self.progress_bounds[:, 1][:, None])
 
-    # if self.move_blocking:
-    #   idx = 0
-    #   for block_len in self.blocks:
-    #     if block_len > 1:
-    #       for i in range(1, block_len):
-    #         constraints.append(self.u[:, idx] == self.u[:, idx + i])
-    #         print(idx, idx + i)
+    if self.move_blocking:
+      idx = 0
+      for block_len in self.blocks:
+        if block_len > 1:
+          for i in range(1, block_len):
+            constraints.append(self.u[:, idx] == self.u[:, idx + i])
+            print(idx, idx + i)
         
-    #     idx += block_len
+        idx += block_len
 
     # state constraints
     if self.state_constraints_with_slack:
@@ -1402,7 +1447,6 @@ class Parameterized_NMPCC(NMPCC):
     self.solve_time = 0
 
     theta = self.project_state_to_progess(state, t)
-    print(theta)
     self.p0.value = np.array([theta])
     self.x0.value = np.array(state)[:, None]
 
@@ -1410,7 +1454,7 @@ class Parameterized_NMPCC(NMPCC):
       # dynamics constraints
       for i in range(self.N):
         dt = self.dts[i]
-        print(i, dt, t + np.sum(self.dts[:i]))
+        # print(i, dt, t + np.sum(self.dts[:i]))
 
         # this should be shifted by one step
         prev_state = (Sinv @ self.prev_x[:, i][:, None]).flatten()
@@ -1418,13 +1462,13 @@ class Parameterized_NMPCC(NMPCC):
 
         A, B, K = self.linearization(prev_state, prev_input, dt)
 
-        self.As[i].value = np.array(A)
-        self.Bs[i].value = np.array(B)
-        self.Ks[i].value = np.array(K)
+        self.As[i].value[:, :] = np.array(A)
+        self.Bs[i].value[:, :] = np.array(B)
+        self.Ks[i].value[:, :] = np.array(K)
 
       for i in range(0, self.N+1):
-        self.ref_pt[i].value = self.path(Tinv[0,0]*self.prev_p[0, i])
-        self.ref_progress_param[i].value = np.array([Tinv[0,0]*self.prev_p[0, i]])
+        self.ref_pt[i].value[:, :] = self.path(Tinv[0,0]*self.prev_p[0, i])
+        self.ref_progress_param[i].value[:] = np.array([Tinv[0,0]*self.prev_p[0, i]])
 
       for i in range(1, self.N+1):
         dt = self.dts[i-1]
@@ -1440,10 +1484,11 @@ class Parameterized_NMPCC(NMPCC):
         cont = np.eye(len(tangent_norm)) - lag
         cont = 0.5 * cont + 0.5 * cont.T
 
-        self.tangents[i].value = tangent
-        self.contouring_matrices[i].value = scipy.linalg.sqrtm(
-          self.lag_weight * lag @ lag.T + \
-            self.cont_weight * cont @ cont.T + np.eye(2) * 1e-3)
+        self.tangents[i].value[:, :] = tangent
+        self.contouring_matrices[i].value[:, :] = scipy.linalg.sqrtm(
+          self.lag_weight * lag @ lag.T +
+          self.cont_weight * cont @ cont.T + 
+          np.eye(2) * 1e-3)
 
       # warm start
       self.x.value = self.prev_x
@@ -1455,13 +1500,9 @@ class Parameterized_NMPCC(NMPCC):
       # result = prob.solve(warm_start = True, solver='OSQP', eps_abs=1e-4, eps_rel=1e-8, max_iter=100000, scaling=False, verbose=True, polish_refine_iter=10)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-4)
       # result = prob.solve(solver='SCS', verbose=True, eps=1e-8, normalize=False, acceleration_lookback=-10)
-      _ = self.problem.solve(solver='CLARABEL', verbose=True, max_iter=500)
+      _ = self.problem.solve(solver='CLARABEL', max_iter=500)
 
       end = time.process_time_ns()
-
-      print("Sols")
-      print(self.x.value)
-      print(self.u.value)
 
       # update solutions for linearization
       # TODO: should really be a line search
@@ -1493,12 +1534,11 @@ class Parameterized_NMPCC(NMPCC):
 
       # print("B")
       # print(data['b'])
-      print('progress', self.p.value[:, -1])
 
     if self.problem.status not in ["infeasible", "unbounded"]:
-      print("U")
-      print(self.u.value[:, 0])
-      print( Winv @ self.u.value[:, 0])
+      # print("U")
+      # print(self.u.value[:, 0])
+      # print( Winv @ self.u.value[:, 0])
 
       self.prev_t = t
 

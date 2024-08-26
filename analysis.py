@@ -1,4 +1,5 @@
 import numpy as np
+import jax
 
 from collections import namedtuple
 import time
@@ -41,6 +42,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10, mpcc=False, noise
     if noise_on_obs:
       xn += (np.random.rand(xn.shape[0]) - 0.5) * 0.1
 
+    # print("control")
     start = time.process_time_ns()
     u = controller.compute(xn, t)
     end = time.process_time_ns()
@@ -52,6 +54,7 @@ def eval(system, controller, x0, T_sim, dt_sim, N_sim_iter=10, mpcc=False, noise
     if noise_on_input:
       u += (np.random.rand(u.shape[0]) - 0.5) * 0.1
 
+    # print("sim")
     # finer simulation
     for i in range(N_sim_iter):
       xn = fwd(xn, u, dt_sim/N_sim_iter)
@@ -141,7 +144,11 @@ def make_cost_computation_curve(problem, solvers, ks, T_pred=1, noise=False):
         solvers_to_run.append(("NU_MPC_exp", nu_mpc_exp))
 
       for j, (name, solver) in enumerate(solvers_to_run):
+        start_eval = time.process_time_ns()
         res = eval(sys, solver, x0, T_sim, dt, noise_on_obs=noise, noise_on_input=noise)
+        end_eval = time.process_time_ns()
+        print('duration: ', (end_eval - start_eval)/1e6, 'ms')
+
         # mpc_sol = eval(sys, nmpc, x0, T_sim, dt)
         # nu_mpc_lin_sol = eval(sys, nu_mpc_lin, x, T_sim, dt)
         # nu_mpc_exp_sol = eval(sys, nu_mpc_exp, x, T_sim, dt)
@@ -159,8 +166,8 @@ def make_cost_computation_curve(problem, solvers, ks, T_pred=1, noise=False):
           u = inputs[i][:, None]
           cost += dt * (diff.T @ quadratic_cost.Q @ diff + u.T @ quadratic_cost.R @ u)
 
-        print(cost)
-        print(sum(computation_times))
+        print('cost', cost)
+        # print('comp_times', sum(computation_times))
 
         solver_data = [sum(computation_times), sum(solve_times), cost[0][0], k, res]
         data.setdefault(name, []).append(solver_data)

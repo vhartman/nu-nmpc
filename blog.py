@@ -113,7 +113,8 @@ def motivation_discretization():
   for N_disc in discretizations:
     dt_disc = T_pred / N_disc
 
-    nmpc = NMPC(sys, N_disc, dt_disc, quadratic_cost, ref)
+    nmpc = ParameterizedNMPC(sys, N_disc, dt_disc, quadratic_cost, ref)
+    # nmpc = NMPC(sys, N_disc, dt_disc, quadratic_cost, ref)
     nmpc.sqp_iters = 1
     nmpc.sqp_mixing = 1
 
@@ -383,7 +384,7 @@ def make_quadcopter_animation():
   dts = get_linear_spacing(0.05, 1, 10)
   # N = 10
   # dts = [1/N] * N
-  nu_mpc = NU_NMPC(sys, dts, quadratic_cost, ref)
+  nu_mpc = Parameterized_NU_NMPC(sys, dts, quadratic_cost, ref)
 
   nu_mpc.nmpc.state_scaling = state_scaling
   nu_mpc.nmpc.input_scaling = input_scaling
@@ -530,8 +531,8 @@ def make_masspoint_cost_comp_for_blog(num_runs=1, randomize_start_state=False):
       np.random.seed(i)
       p.x0 = x0 + np.random.rand(3) * 0.1
 
-    # data = make_cost_computation_curve(p, ks = [5, 7, 10, 20, 30, 40], T_pred= 40 * dt_sim, noise=True)
-    data = make_cost_computation_curve(p, solvers, ks = [5, 10, 20, 30], T_pred= 40 * dt_sim, noise=False)
+    data = make_cost_computation_curve(p, solvers, ks = [5, 7, 10, 20, 30, 40], T_pred= 40 * dt_sim, noise=False)
+    # data = make_cost_computation_curve(p, solvers, ks = [5, 10, 20, 30], T_pred= 40 * dt_sim, noise=False)
     
     normalizing_cost = data["NMPC"][-1][2]
     normalized_data = data
@@ -884,6 +885,10 @@ if __name__ == "__main__":
   # mpcc_amzracecar_test(track='race')
   # mpcc_amzracecar_test(track='fig8')
 
+  make_masspoint_cost_comp_for_blog(num_runs=3, randomize_start_state=False)
+  # make_quadcopter_cost_comp_for_blog(num_runs=30, randomize_start_state=True)
+  # make_cartpole_cost_comp_for_blog(num_runs=30, randomize_start_state=True)
+
   # make_masspoint_cost_comp_for_blog(num_runs=1, randomize_start_state=True)
   # make_quadcopter_cost_comp_for_blog(num_runs=100, randomize_start_state=True)
   # make_cartpole_cost_comp_for_blog(num_runs=100, randomize_start_state=True)
@@ -891,7 +896,10 @@ if __name__ == "__main__":
   # not used in the blog
   # make_double_cartpole_cost_comp_for_blog()
 
-  make_racecar_analysis(num_runs=10, track='fig8')
-  make_racecar_analysis(num_runs=10, track='race')
+  # make_racecar_analysis(num_runs=10, track='fig8')
+  # make_racecar_analysis(num_runs=10, track='race')
+
+  # make_racecar_analysis(num_runs=1, track='fig8')
+  # make_racecar_analysis(num_runs=1, track='race')
 
   plt.show()

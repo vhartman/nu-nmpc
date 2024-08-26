@@ -10,11 +10,14 @@ class System:
     self.sys_jac = jax.jit(jax.jacfwd(self.f, argnums=0))
     self.input_jac = jax.jit(jax.jacfwd(self.f, argnums=1))
 
-    self.tmp = jax.jit(jax.jacfwd(self.step_euler, argnums=0))
-    self.tmp_inp = jax.jit(jax.jacfwd(self.step_euler, argnums=1))
+    self.tmp = jax.jit(jax.jacfwd(self.step_rk4, argnums=0))
+    self.tmp_inp = jax.jit(jax.jacfwd(self.step_rk4, argnums=1))
 
     self.state_names = []
     self.input_names = []
+
+    self.jit_lin = jax.jit(self.linearization)
+    self.vmap_linearization = jax.jit(jax.vmap(self.linearization, in_axes=(1, 1, 0)))
 
   def f(self, state, u):
     raise NotImplementedError("Implement me pls")
@@ -40,8 +43,7 @@ class System:
     new_state = state + dt/2. * (x_dot + self.f(tmp, u))
     return new_state
   
-  def step_rk4(self, state, u, dt_full):
-    steps = 5
+  def step_rk4(self, state, u, dt_full, steps=1):
     x = state
     dt = dt_full / steps
     for _ in range(steps):
@@ -64,6 +66,9 @@ class System:
 
   def K(self, x, u, dt):
     return self.A(x, u, dt) @ x[:, None] + self.B(x, u, dt) @ u[:, None] - dt * self.f(x, u)[:, None]
+
+  def jitted_linearization(self, x, u, dt):
+    return self.jit_lin(x, u, dt)
 
   # f = f() + A(x-xref) + B(u-uref)
   # xn = x + dt * (f() + A(x-xref) + B(u-uref))

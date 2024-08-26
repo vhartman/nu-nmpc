@@ -2315,8 +2315,12 @@ def mpcc_amzracecar_test(track='fig8'):
   # ref = lambda t: np.array([squircle(t*4)[0], squircle(t*4)[1]]).reshape(-1, 1)
   # ref = lambda t: np.array([square(t)[0], square(t)[1]]).reshape(-1, 1)
   
-  state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5, 1, 0.35]))
-  input_scaling = 1 / (np.array([5, 3]))
+  # state_scaling = 1 / (np.array([1, 1, 2*np.pi, 2, 2, 5, 1, 0.35]))
+  # input_scaling = 1 / (np.array([5, 3]))
+  
+  state_scaling = 1 / (np.array([1, 1, 1, 1, 1, 1, 1, 1]))
+  input_scaling = 1 / (np.array([1, 1]))
+  
   mapping = np.array([
     [1, 0, 0, 0, 0, 0, 0, 0],
     [0, 1, 0, 0, 0, 0, 0, 0],
@@ -2345,7 +2349,7 @@ def mpcc_amzracecar_test(track='fig8'):
   # dts = get_linear_spacing(dt, 40 * dt, 20) # 7.95, 13
   # dts = get_linear_spacing(dt, 40 * dt, 10) # does not work
   # dts = get_linear_spacing(dt, 30 * dt, 20) # 7.9
-  dts = get_linear_spacing(dt, 40 * dt, 20) # 8.125, 25
+  dts = get_linear_spacing(dt, 40 * dt, 10) # 8.125, 25
   # dts = get_linear_spacing(dt, 40 * dt, 10) # 8.125, 25
   # plt.plot(dts)
 
